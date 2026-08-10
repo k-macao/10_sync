@@ -368,16 +368,20 @@ def get_hotlist_data(source):
 
 
 # --- 任务：热搜看板 ---
-def task_hotlist(dry_run=False, source_override=None):
+def task_hotlist(dry_run=False, source_override=None, title_override=None):
     effective_source = source_override or HOTLIST_SOURCE
     if "1" not in ENABLED_PAGES and "2" not in ENABLED_PAGES:
         return
         
     source_map = {"zhihu": "知乎热榜", "bilibili": "B站热搜", "github": "GitHub 热门", "eastmoney": "东方财富"}
     titles = get_hotlist_data(effective_source)
-    title_display = source_map.get(effective_source, "热门看板")
-    if effective_source == "eastmoney":
-        title_display = "东方财富"
+    # 标题优先级：命令行 --title > 默认映射 > 东方财富特殊
+    if title_override:
+        title_display = title_override
+    else:
+        title_display = source_map.get(effective_source, "热门看板")
+        if effective_source == "eastmoney":
+            title_display = "东方财富"
 
     # 🌟 核心优化：按像素真实宽度计算换行，解决中英文混排留白问题
     def wrap_text_by_pixels(draw, text, font, max_width):
@@ -439,13 +443,13 @@ def task_hotlist(dry_run=False, source_override=None):
 
     next_s = 0
     if "1" in ENABLED_PAGES:
-        print("生成 Page 1: 热搜 (上)...")
+        print(f"生成 Page 1: {title_display} (一)...")
         img1 = Image.new('1', (400, 300), color=255)
         next_s = draw_list(ImageDraw.Draw(img1), f"◆ {title_display} (一)", titles, 0)
         push_image(img1, 1, dry_run=dry_run)
 
     if "2" in ENABLED_PAGES:
-        print("生成 Page 2: 热搜 (下)...")
+        print(f"生成 Page 2: {title_display} (二)...")
         img2 = Image.new('1', (400, 300), color=255)
         start_index = next_s if "1" in ENABLED_PAGES else 7
         draw_list(ImageDraw.Draw(img2), f"◆ {title_display} (二)", titles, start_index)
@@ -627,6 +631,8 @@ def parse_args():
     parser.add_argument("--dry-run", action="store_true", help="仅本地生成预览图，不推送到 Zectrix")
     parser.add_argument("--east-column", dest="east_column", type=str, default=None,
                         help="东方财富栏目ID，默认345（财经导读）")
+    parser.add_argument("--title", dest="title", type=str, default=None,
+                        help="自定义推送标题，例如 \"章鱼 AI·全景分析\"，将覆盖默认热榜标题")
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -642,6 +648,8 @@ if __name__ == "__main__":
     if args.east_column:
         EASTMONEY_COLUMN = args.east_column
         print(f"🔧 东方财富栏目覆盖: {EASTMONEY_COLUMN}")
+    if args.title:
+        print(f"🔧 自定义标题: {args.title}")
 
     dry_run_mode = args.dry_run
     # 若未配置密钥，自动进入 dry_run 本地预览模式，避免报错退出
@@ -666,7 +674,7 @@ if __name__ == "__main__":
     print(f"   热搜源: {HOTLIST_SOURCE} | 页面: {ENABLED_PAGES} | 模式: {'dry_run' if dry_run_mode else 'push'}")
     
     # 执行热搜任务
-    task_hotlist(dry_run=dry_run_mode, source_override=HOTLIST_SOURCE)
+    task_hotlist(dry_run=dry_run_mode, source_override=HOTLIST_SOURCE, title_override=args.title)
     # 执行日历任务
     task_calendar(dry_run=dry_run_mode)
     # 执行天气任务

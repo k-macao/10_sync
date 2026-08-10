@@ -23,6 +23,11 @@ on:
         required: false
         default: '345'
         type: string
+      custom_title:
+        description: '自定义标题（如 章鱼 AI·全景分析，留空用默认）'
+        required: false
+        default: '章鱼 AI·全景分析'
+        type: string
       pages:
         description: '推送页面 (例如 1,2,3,4 默认为全部)'
         required: false
@@ -65,9 +70,14 @@ jobs:
         run: |
           echo "热榜源: ${{ inputs.hotlist_source || 'eastmoney' }}"
           echo "栏目: ${{ inputs.eastmoney_column || '345' }}"
+          echo "标题: ${{ inputs.custom_title || '章鱼 AI·全景分析' }}"
           echo "页面: ${{ inputs.pages || '1,2,3,4' }}"
+          TITLE_ARG=""
+          if [ -n "${{ inputs.custom_title }}" ]; then
+            TITLE_ARG="--title \"${{ inputs.custom_title }}\""
+          fi
           if [ "${{ inputs.dry_run }}" = "true" ]; then
-            python main.py --source ${{ inputs.hotlist_source || 'eastmoney' }} --pages ${{ inputs.pages || '1,2,3,4' }} --east-column ${{ inputs.eastmoney_column || '345' }} --dry-run
+            python main.py --source ${{ inputs.hotlist_source || 'eastmoney' }} --pages ${{ inputs.pages || '1,2,3,4' }} --east-column ${{ inputs.eastmoney_column || '345' }} $TITLE_ARG --dry-run
           else
-            python main.py --source ${{ inputs.hotlist_source || 'eastmoney' }} --pages ${{ inputs.pages || '1,2,3,4' }} --east-column ${{ inputs.eastmoney_column || '345' }}
+            python main.py --source ${{ inputs.hotlist_source || 'eastmoney' }} --pages ${{ inputs.pages || '1,2,3,4' }} --east-column ${{ inputs.eastmoney_column || '345' }} $TITLE_ARG
           fi
