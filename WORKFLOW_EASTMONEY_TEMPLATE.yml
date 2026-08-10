@@ -1,0 +1,83 @@
+# 将此文件内容复制到 .github/workflows/run.yml 即可获得带下拉选择的东方财富手动推送
+# 路径：.github/workflows/run.yml
+# 在 GitHub 网页上直接编辑该文件，粘贴以下内容并 Commit 即可
+name: 墨水屏综合看板推送
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # 每小时运行一次
+  workflow_dispatch:
+    inputs:
+      hotlist_source:
+        description: '热榜源 (zhihu/bilibili/github/eastmoney)'
+        required: false
+        default: 'eastmoney'
+        type: choice
+        options:
+          - zhihu
+          - bilibili
+          - github
+          - eastmoney
+      eastmoney_column:
+        description: '东方财富栏目ID (仅eastmoney生效, 默认345)'
+        required: false
+        default: '345'
+        type: string
+      custom_title:
+        description: '自定义标题（如 章鱼 AI·全景分析，留空用默认）'
+        required: false
+        default: '章鱼 AI·全景分析'
+        type: string
+      pages:
+        description: '推送页面 (例如 1,2,3,4 默认为全部)'
+        required: false
+        default: '1,2,3,4'
+        type: string
+      dry_run:
+        description: '仅预览不推送 (true/false)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 获取代码
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: 安装 Python 环境
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: 安装依赖包
+        run: pip install requests pillow zhdate
+
+      - name: 运行！生成图片并推送 (支持东方财富手动推送)
+        env:
+          ZECTRIX_API_KEY: ${{ secrets.ZECTRIX_API_KEY }}
+          ZECTRIX_MAC: ${{ secrets.ZECTRIX_MAC }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AMAP_WEATHER_KEY: ${{ secrets.AMAP_WEATHER_KEY }}
+        run: |
+          echo "热榜源: ${{ inputs.hotlist_source || 'eastmoney' }}"
+          echo "栏目: ${{ inputs.eastmoney_column || '345' }}"
+          echo "标题: ${{ inputs.custom_title || '章鱼 AI·全景分析' }}"
+          echo "页面: ${{ inputs.pages || '1,2,3,4' }}"
+          TITLE_ARG=""
+          if [ -n "${{ inputs.custom_title }}" ]; then
+            TITLE_ARG="--title \"${{ inputs.custom_title }}\""
+          fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            python main.py --source ${{ inputs.hotlist_source || 'eastmoney' }} --pages ${{ inputs.pages || '1,2,3,4' }} --east-column ${{ inputs.eastmoney_column || '345' }} $TITLE_ARG --dry-run
+          else
+            python main.py --source ${{ inputs.hotlist_source || 'eastmoney' }} --pages ${{ inputs.pages || '1,2,3,4' }} --east-column ${{ inputs.eastmoney_column || '345' }} $TITLE_ARG
+          fi

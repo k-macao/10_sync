@@ -1,0 +1,6 @@
+page_*.png
+page_*.jpg
+__pycache__/
+*.pyc
+*preview*.jpg
+章鱼*.jpg
