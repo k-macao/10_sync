@@ -72,12 +72,14 @@ jobs:
           echo "栏目: ${{ inputs.eastmoney_column || '345' }}"
           echo "标题: ${{ inputs.custom_title || '章鱼 AI·全景分析' }}"
           echo "页面: ${{ inputs.pages || '1,2,3,4' }}"
-          TITLE_ARG=""
+          # 用数组拼接参数：避免标题含空格/·等字符时被 shell 错误拆分
+          ARGS=(--source "${{ inputs.hotlist_source || 'eastmoney' }}")
+          ARGS+=(--pages "${{ inputs.pages || '1,2,3,4' }}")
+          ARGS+=(--east-column "${{ inputs.eastmoney_column || '345' }}")
           if [ -n "${{ inputs.custom_title }}" ]; then
-            TITLE_ARG="--title \"${{ inputs.custom_title }}\""
+            ARGS+=(--title "${{ inputs.custom_title }}")
           fi
           if [ "${{ inputs.dry_run }}" = "true" ]; then
-            python main.py --source ${{ inputs.hotlist_source || 'eastmoney' }} --pages ${{ inputs.pages || '1,2,3,4' }} --east-column ${{ inputs.eastmoney_column || '345' }} $TITLE_ARG --dry-run
-          else
-            python main.py --source ${{ inputs.hotlist_source || 'eastmoney' }} --pages ${{ inputs.pages || '1,2,3,4' }} --east-column ${{ inputs.eastmoney_column || '345' }} $TITLE_ARG
+            ARGS+=(--dry-run)
           fi
+          python main.py "${ARGS[@]}"
