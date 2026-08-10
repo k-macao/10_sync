@@ -1,0 +1,4 @@
+page_*.png
+page_*.jpg
+__pycache__/
+*.pyc

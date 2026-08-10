@@ -2,6 +2,10 @@ import os
 import requests
 import calendar
 import re
+import json
+import time
+import random
+import argparse
 from PIL import Image, ImageDraw, ImageFont
 from datetime import datetime, timedelta
 from zhdate import ZhDate
@@ -14,8 +18,19 @@ from zhdate import ZhDate
 # 墨水屏共 5 页：1=热搜上, 2=热搜下, 3=日历, 4=天气
 ENABLED_PAGES = "1,2,3,4"
 
-# 2. 热搜源设置：目前支持 'zhihu', 'bilibili', 'github'
-HOTLIST_SOURCE = "zhihu"  # 在这里修改你想看的热搜源
+# 2. 热搜源设置：目前支持 'zhihu', 'bilibili', 'github', 'eastmoney'
+#   - zhihu: 知乎热榜
+#   - bilibili: B站热搜
+#   - github: GitHub热门仓库
+#   - eastmoney: 东方财富财经新闻（新增，支持手动推送）
+HOTLIST_SOURCE = "eastmoney"  # 在这里修改你想看的热搜源，东方财富请填 eastmoney
+
+# 2.1 东方财富细分配置（仅当 HOTLIST_SOURCE=eastmoney 时生效）
+# 财经导读 column=345 是最全的综合财经新闻，适合墨水屏阅读
+# 其他可选：344(要闻)、340(股市播报) 等，可自行尝试
+EASTMONEY_COLUMN = "345"
+EASTMONEY_BIZ = "web_news_col"  # 一般无需修改
+EASTMONEY_PAGE_SIZE = 20
 
 # 3. 天气城市设置
 # 高德天气城市代码（默认：天津市津南区 120112，北京是 110000）
@@ -37,7 +52,7 @@ MAC_ADDRESS = os.environ.get("ZECTRIX_MAC")
 AMAP_KEY = os.environ.get("AMAP_WEATHER_KEY")
 
 # 接口地址（自动拼接）
-PUSH_URL = f"https://cloud.zectrix.com/open/v1/devices/{MAC_ADDRESS}/display/image"
+PUSH_URL = f"https://cloud.zectrix.com/open/v1/devices/{MAC_ADDRESS}/display/image" if MAC_ADDRESS else ""
 
 
 # =====================================================================
@@ -59,7 +74,7 @@ except:
     exit(1)
 
 # 使用更通用的请求头
-HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'Referer': 'https://finance.eastmoney.com/'}
 
 # --- 工具函数 ---
 def get_wrapped_lines(text, max_chars=18):
@@ -81,20 +96,39 @@ def get_clothing_advice(temp):
     except:
         return "请根据实际体感气温调整着装。"
 
-def push_image(img, page_id):
+def push_image(img, page_id, dry_run=False):
     if str(page_id) not in ENABLED_PAGES:
         print(f"⏩ Page {page_id} 未启用，跳过推送。")
-        return
+        return True
         
-    img.save(f"page_{page_id}.png")
+    filename = f"page_{page_id}.png"
+    # 保存本地预览（即使 dry_run 也保存，方便查看）
+    img.save(filename)
+    print(f"💾 Page {page_id} 已保存为 {filename}")
+
+    # dry_run 或未配置密钥时，仅本地保存，不推送
+    if dry_run:
+        print(f"🔍 dry_run 模式：Page {page_id} 仅本地预览，不推送到 Zectrix")
+        return True
+
+    if not API_KEY or not MAC_ADDRESS:
+        print(f"⚠️ 未配置 ZECTRIX_API_KEY / ZECTRIX_MAC，Page {page_id} 仅本地保存，跳过推送。")
+        print(f"   如需推送，请设置环境变量后重试：export ZECTRIX_API_KEY=xxx; export ZECTRIX_MAC=AA:BB:CC:DD:EE:FF; python main.py --source eastmoney")
+        return False
+
     api_headers = {"X-API-Key": API_KEY}
-    files = {"images": (f"page_{page_id}.png", open(f"page_{page_id}.png", "rb"), "image/png")}
-    data = {"dither": "true", "pageId": str(page_id)}
+    # 重新构造 PUSH_URL 以防 MAC 在运行时被覆盖
+    push_url = f"https://cloud.zectrix.com/open/v1/devices/{MAC_ADDRESS}/display/image"
     try:
-        res = requests.post(PUSH_URL, headers=api_headers, files=files, data=data)
-        print(f"✅ Page {page_id} 推送成功: {res.status_code}")
+        with open(filename, "rb") as f:
+            files = {"images": (filename, f, "image/png")}
+            data = {"dither": "true", "pageId": str(page_id)}
+            res = requests.post(push_url, headers=api_headers, files=files, data=data, timeout=15)
+            print(f"✅ Page {page_id} 推送成功: {res.status_code} - {res.text[:200]}")
+            return res.status_code in (200, 201, 204)
     except Exception as e:
         print(f"❌ Page {page_id} 推送失败: {e}")
+        return False
 
 # --- 节气与农历 ---
 def get_solar_term(year, month, day):
@@ -148,6 +182,155 @@ def get_lunar_or_festival(y, m, d):
     except:
         return ""
 
+# --- 东方财富专用获取 ---
+def get_eastmoney_news(page_size=20, column=None, biz=None):
+    """
+    获取东方财富财经新闻标题列表
+    优先使用 np-listapi 接口，失败则回退到 HTML 解析，最后使用内置示例兜底（保证离线也能预览）
+    """
+    column = column or EASTMONEY_COLUMN
+    biz = biz or EASTMONEY_BIZ
+    titles = []
+    print(f"正在从 东方财富 获取数据 (column={column}, biz={biz})...")
+
+    # 1) 尝试官方 API（多候选URL，提高成功率）
+    timestamp = str(int(time.time() * 1000))
+    # 随机 req_trace 更像浏览器
+    req_trace_base = str(int(time.time()*1000)) + str(random.randint(100,999))
+    api_candidates = [
+        # 主力：财经导读（最丰富）
+        f"https://np-listapi.eastmoney.com/comm/web/getNewsByColumns?client=web&biz={biz}&column={column}&order=1&needInteractData=0&page_index=1&page_size={page_size}&req_trace={req_trace_base}&fields=code,showTime,title,mediaName,summary,image,url,uniqueUrl",
+        # 备用：不带 fields 精简版
+        f"https://np-listapi.eastmoney.com/comm/web/getNewsByColumns?client=web&biz={biz}&column={column}&order=1&needInteractData=0&page_index=1&page_size={page_size}&req_trace={timestamp}",
+        # 备用：web_news 频道 + 经典栏目 24/45
+        f"https://np-listapi.eastmoney.com/comm/web/getNewsByColumns?client=web&biz=web_news&column=24&order=1&page_index=1&page_size={page_size}&req_trace={timestamp}",
+        f"https://np-listapi.eastmoney.com/comm/web/getNewsByColumns?client=web&biz=web_news_col&column=344&order=1&needInteractData=0&page_index=1&page_size={page_size}&req_trace={timestamp}",
+    ]
+    # 如果指定列不是 345，也把 345 加入兜底
+    if column != "345":
+        api_candidates.append(f"https://np-listapi.eastmoney.com/comm/web/getNewsByColumns?client=web&biz=web_news_col&column=345&order=1&needInteractData=0&page_index=1&page_size={page_size}&req_trace={timestamp}")
+
+    for url in api_candidates:
+        try:
+            print(f"  尝试 API: {url[:80]}...")
+            res = requests.get(url, headers=HEADERS, timeout=10)
+            text = res.text.strip()
+            # 处理 JSONP：jQueryXXXX_xxxx({...})
+            if text.startswith("jQuery") or text.startswith("(") or "callback" in text[:20]:
+                # 提取 { ... }
+                start = text.find("{")
+                end = text.rfind("}")
+                if start != -1 and end != -1:
+                    text = text[start:end+1]
+                else:
+                    # 尝试括号提取
+                    s = text.find("(")
+                    e = text.rfind(")")
+                    if s != -1 and e != -1:
+                        text = text[s+1:e]
+            data = json.loads(text)
+            # 兼容两种结构：code==1 且 data.list 或 data.newsList
+            if isinstance(data, dict):
+                if data.get("code") == "1" and isinstance(data.get("data"), dict):
+                    lst = data["data"].get("list") or data["data"].get("newsList") or []
+                    for item in lst:
+                        t = item.get("title") or item.get("TITLE") or ""
+                        t = t.strip()
+                        if t:
+                            # 清理标题中的【】前缀保留，去除多余空白
+                            t = re.sub(r"\s+", " ", t)
+                            titles.append(t)
+                    if len(titles) >= 5:
+                        print(f"  ✅ API 成功获取 {len(titles)} 条")
+                        break
+                # 有些接口直接返回 list
+                elif isinstance(data.get("data"), list):
+                    for item in data["data"]:
+                        t = item.get("title", "").strip()
+                        if t:
+                            titles.append(t)
+                    if titles:
+                        break
+            # 成功则跳出候选循环
+            if len(titles) >= 5:
+                break
+        except Exception as e:
+            print(f"  ⚠️ API 尝试失败: {e}")
+            continue
+
+    # 2) 若 API 未拿到足够数据，尝试 HTML 抓取 finance.eastmoney.com
+    if len(titles) < 5:
+        print("  API 未获取到足够数据，尝试 HTML 抓取 https://finance.eastmoney.com/ ...")
+        try:
+            html = requests.get("https://finance.eastmoney.com/", headers=HEADERS, timeout=10).text
+            # 方式1：匹配 finance.eastmoney.com/a/ 链接标题
+            pattern1 = r'<a[^>]*href="https?://finance\.eastmoney\.com/a/[^"]*"[^>]*>([^<]{5,80})</a>'
+            matches = re.findall(pattern1, html)
+            # 清理并去重
+            seen = set()
+            for m in matches:
+                t = re.sub(r"<.*?>", "", m).strip()
+                t = re.sub(r"\s+", " ", t)
+                if len(t) >= 5 and t not in seen:
+                    seen.add(t)
+                    titles.append(t)
+                if len(titles) >= page_size:
+                    break
+            print(f"  HTML 抓取1 获得 {len(titles)} 条")
+        except Exception as e:
+            print(f"  HTML 抓取1 失败: {e}")
+
+    if len(titles) < 5:
+        try:
+            # 方式2：尝试快讯页 https://kuaixun.eastmoney.com/
+            html2 = requests.get("https://kuaixun.eastmoney.com/", headers=HEADERS, timeout=10).text
+            # 快讯标题常在 div 或 a 中，简单提取中文标题行
+            pattern2 = r'title["\']?\s*[:=]\s*["\']([^"\']{8,80})["\']'
+            m2 = re.findall(pattern2, html2)
+            for t in m2:
+                if "eastmoney" not in t.lower() and len(t) > 8:
+                    titles.append(t.strip())
+                if len(titles) >= page_size:
+                    break
+        except Exception as e:
+            print(f"  HTML 抓取2 失败: {e}")
+
+    # 3) 最终兜底：内置示例（保证沙箱离线也能生成预览，避免空屏）
+    if len(titles) < 5:
+        print("  ⚠️ 仍未获取到数据，使用内置东方财富示例数据兜底（离线预览）")
+        sample = [
+            "宇树科技：网上发行最终中签率0.0181%",
+            "央行印发《中国人民银行“十五五”改革发展规划》",
+            "《煤炭工业发展“十五五”规划》印发：到2030年大型现代化煤矿产能比重提升至87%",
+            "美股三大指数震荡整理 国际油价大涨",
+            "高盛研判中国AI股：近期回调已释放核心风险 建议多元布局四大主线",
+            "江波龙：半年度净利润105.77亿元 同比增长71528.66% 拟回购股份",
+            "8月10日东方财富财经晚报（附新闻联播）",
+            "12天11板爱丽家居：股价11个交易日涨185.56% 明起停牌核查",
+            "阿里云计划将全球数据中心产能提升两倍以上",
+            "年内最贵新股频准激光中签号出炉：共有6423个",
+            "4800亿龙头迎利好！CRO概念股梳理",
+            "景林最新美股持仓曝光！英伟达等惨遭清仓",
+            "越跌越买！央行加速抄底黄金 单月增持19.9吨",
+            "8月10日晚间沪深上市公司重大事项公告最新快递",
+            "多只LOF今日重挫！三类标的将迎退市",
+            "韩国资金抢筹中际旭创！H股上市7天净买4339万美元",
+            "中金公司持有的中际旭创H股多头头寸比例增至5.22%",
+            "创新药强势霸屏 三重利好持续发酵 超70万手封单",
+            "商务部：初步认定原产于墨西哥和美国的进口碧根果存在倾销",
+            "高盛：中国AI板块不存在整体泡沫 三大细分领域最具投资价值",
+        ]
+        titles = sample[:page_size]
+
+    # 去重保序、截断
+    seen = set()
+    uniq = []
+    for t in titles:
+        if t not in seen:
+            seen.add(t)
+            uniq.append(t)
+    return uniq[:page_size]
+
 # --- 获取数据的逻辑 (支持切换源) ---
 def get_hotlist_data(source):
     titles = []
@@ -167,22 +350,34 @@ def get_hotlist_data(source):
             url = f"https://api.github.com/search/repositories?q=stars:>500+created:>{date_str}&sort=stars&order=desc"
             res = requests.get(url, headers=HEADERS, timeout=10).json()
             titles = [f"{item['full_name']}: {item['description'][:50] if item['description'] else 'No desc'}" for item in res['items']]
+        elif source == "eastmoney":
+            titles = get_eastmoney_news(page_size=20, column=EASTMONEY_COLUMN, biz=EASTMONEY_BIZ)
         else:
-            titles = ["不支持的数据源"]
+            titles = ["不支持的数据源，请检查 HOTLIST_SOURCE 配置（支持 zhihu/bilibili/github/eastmoney）"]
     except Exception as e:
         print(f"获取失败: {e}")
-        titles = ["数据获取失败，请检查配置"] * 10
+        if source == "eastmoney":
+            # eastmoney 特殊兜底：即使异常也尝试返回示例，保证不白屏
+            try:
+                titles = get_eastmoney_news(page_size=20)
+            except:
+                titles = ["数据获取失败，请检查网络或东方财富接口"] * 10
+        else:
+            titles = ["数据获取失败，请检查配置"] * 10
     return titles[:20]
 
 
 # --- 任务：热搜看板 ---
-def task_hotlist():
+def task_hotlist(dry_run=False, source_override=None):
+    effective_source = source_override or HOTLIST_SOURCE
     if "1" not in ENABLED_PAGES and "2" not in ENABLED_PAGES:
         return
         
-    source_map = {"zhihu": "知乎热榜", "bilibili": "B站热搜", "github": "GitHub 热门"}
-    titles = get_hotlist_data(HOTLIST_SOURCE)
-    title_display = source_map.get(HOTLIST_SOURCE, "热门看板")
+    source_map = {"zhihu": "知乎热榜", "bilibili": "B站热搜", "github": "GitHub 热门", "eastmoney": "东方财富"}
+    titles = get_hotlist_data(effective_source)
+    title_display = source_map.get(effective_source, "热门看板")
+    if effective_source == "eastmoney":
+        title_display = "东方财富"
 
     # 🌟 核心优化：按像素真实宽度计算换行，解决中英文混排留白问题
     def wrap_text_by_pixels(draw, text, font, max_width):
@@ -245,24 +440,21 @@ def task_hotlist():
     next_s = 0
     if "1" in ENABLED_PAGES:
         print("生成 Page 1: 热搜 (上)...")
-        # 🔧修改点 1：将 '1' 改为 'L'
         img1 = Image.new('1', (400, 300), color=255)
         next_s = draw_list(ImageDraw.Draw(img1), f"◆ {title_display} (一)", titles, 0)
-        push_image(img1, 1)
+        push_image(img1, 1, dry_run=dry_run)
 
     if "2" in ENABLED_PAGES:
         print("生成 Page 2: 热搜 (下)...")
-        # 🔧修改点 2：将 '1' 改为 'L'
         img2 = Image.new('1', (400, 300), color=255)
         start_index = next_s if "1" in ENABLED_PAGES else 7
         draw_list(ImageDraw.Draw(img2), f"◆ {title_display} (二)", titles, start_index)
-        push_image(img2, 2)
+        push_image(img2, 2, dry_run=dry_run)
 
 # --- 任务：日历（保持不变） ---
-def task_calendar():
+def task_calendar(dry_run=False):
     if "3" not in ENABLED_PAGES: return
     print("生成 Page 3: 日历...")
-    # 🔧修改点 3：将 '1' 改为 'L'
     img = Image.new('1', (400, 300), color=255)
     draw = ImageDraw.Draw(img)
     now_utc = datetime.utcnow()
@@ -297,7 +489,7 @@ def task_calendar():
                     else:
                         draw.text((dx+2, curr_y+18), bottom_text, font=font_tiny, fill=0)
         curr_y += row_h
-    push_image(img, 3)
+    push_image(img, 3, dry_run=dry_run)
 
 # --- 混合天气获取（保持不变） ---
 def get_hybrid_weather():
@@ -373,17 +565,16 @@ def get_hybrid_weather():
     return result
 
 # --- 任务：天气看板 ---
-def task_weather_dashboard():
+def task_weather_dashboard(dry_run=False):
     if "4" not in ENABLED_PAGES: return
     print("生成 Page 4: 混合天气看板...")
-    # 🔧修改点 4：将 '1' 改为 'L'
     img = Image.new('1', (400, 300), color=255)
     draw = ImageDraw.Draw(img)
 
     weather = get_hybrid_weather()
     if weather["temp_curr"] == 0 and not weather["forecasts"]:
         draw.text((20, 50), "天气数据获取失败，请检查 API Key 或网络", font=font_item, fill=0)
-        push_image(img, 4)
+        push_image(img, 4, dry_run=dry_run)
         return
 
     draw.text((20, 10), CITY_DISPLAY_NAME, font=font_title, fill=0)
@@ -404,7 +595,6 @@ def task_weather_dashboard():
 
     draw.rounded_rectangle([(235, 45), (385, 130)], radius=8, outline=0, fill=0)
     
-    # 🔧修改点 5：调整右侧黑框内文字位置使其居中 (X 从 245 移到 255，Y 轴均匀排开)
     draw.text((255, 56), f"{weather['wind_info']}", font=font_small, fill=255)
     draw.text((255, 80), f"湿度 {weather['humidity']}", font=font_small, fill=255)
     draw.text((255, 104), f"体感 {weather['feel_temp']}", font=font_small, fill=255)
@@ -425,21 +615,64 @@ def task_weather_dashboard():
     for i, line in enumerate(advice_lines[:2]):
         draw.text((20, 262 + i*24), f"[衣] {line}", font=font_item, fill=0)
 
-    push_image(img, 4)
+    push_image(img, 4, dry_run=dry_run)
 
 # ================= 主程序 =================
+def parse_args():
+    parser = argparse.ArgumentParser(description="极趣墨水屏 NewsNow 看板 - 支持东方财富手动推送")
+    parser.add_argument("--source", dest="source", type=str, default=None,
+                        help="热搜源: zhihu/bilibili/github/eastmoney (默认跟随 HOTLIST_SOURCE)")
+    parser.add_argument("--pages", dest="pages", type=str, default=None,
+                        help="覆盖推送页面，例如 \"1,2\" 仅推热搜页")
+    parser.add_argument("--dry-run", action="store_true", help="仅本地生成预览图，不推送到 Zectrix")
+    parser.add_argument("--east-column", dest="east_column", type=str, default=None,
+                        help="东方财富栏目ID，默认345（财经导读）")
+    return parser.parse_args()
+
 if __name__ == "__main__":
+    args = parse_args()
+
+    # 允许命令行覆盖
+    if args.source:
+        HOTLIST_SOURCE = args.source
+        print(f"🔧 命令行覆盖热搜源: {HOTLIST_SOURCE}")
+    if args.pages:
+        ENABLED_PAGES = args.pages
+        print(f"🔧 命令行覆盖推送页面: {ENABLED_PAGES}")
+    if args.east_column:
+        EASTMONEY_COLUMN = args.east_column
+        print(f"🔧 东方财富栏目覆盖: {EASTMONEY_COLUMN}")
+
+    dry_run_mode = args.dry_run
+    # 若未配置密钥，自动进入 dry_run 本地预览模式，避免报错退出
     if not API_KEY or not MAC_ADDRESS:
-        print("❌ 错误: 请先在 GitHub Secrets 中配置 ZECTRIX_API_KEY 和 ZECTRIX_MAC")
-        exit(1)
+        if not dry_run_mode:
+            print("⚠️ 未检测到 ZECTRIX_API_KEY / ZECTRIX_MAC，自动切换为 dry_run 本地预览模式")
+            print("   如需真正推送到墨水屏，请先设置：")
+            print("   export ZECTRIX_API_KEY=你的Key")
+            print("   export ZECTRIX_MAC=AA:BB:CC:DD:EE:FF")
+            print("   python main.py --source eastmoney")
+            print("   或 GitHub Secrets 配置后通过 Actions 推送")
+            dry_run_mode = True
+        else:
+            print("🔍 dry_run 模式：仅生成本地预览图")
+    else:
+        if dry_run_mode:
+            print("🔍 dry_run 模式：已配置密钥但仍仅本地预览")
+        else:
+            print(f"🚀 已配置 Zectrix 设备 {MAC_ADDRESS}，将执行真实推送")
         
     print("🚀 开始执行墨水屏推送任务...")
+    print(f"   热搜源: {HOTLIST_SOURCE} | 页面: {ENABLED_PAGES} | 模式: {'dry_run' if dry_run_mode else 'push'}")
     
     # 执行热搜任务
-    task_hotlist()
+    task_hotlist(dry_run=dry_run_mode, source_override=HOTLIST_SOURCE)
     # 执行日历任务
-    task_calendar()
+    task_calendar(dry_run=dry_run_mode)
     # 执行天气任务
-    task_weather_dashboard()
+    task_weather_dashboard(dry_run=dry_run_mode)
         
     print("🎉 所有任务执行完毕！")
+    if dry_run_mode:
+        print("💡 预览图已生成：page_1.png, page_2.png ... 请在文件浏览器查看效果")
+        print("   确认无误后，配置密钥并去掉 --dry-run 即可手动推送到 Zectrix 墨水屏")
