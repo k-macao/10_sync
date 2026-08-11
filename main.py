@@ -12,13 +12,16 @@ from datetime import datetime, timedelta
 # 🌟 第一部分：用户自定义区（想改什么，直接在这里改文字和数字） 🌟
 # =====================================================================
 
-# 1. 看板标题（显示在每页顶部标题栏）
-BOARD_TITLE = "章鱼AI全景分析"
+# 1. 看板主标题（每页顶栏前缀，后接来源标签区分四页）
+BOARD_TITLE = "章鱼 AI+"
 
 # 2. 控制推送哪几页？
-# 墨水屏共 4 页：
-#   - 1,2 = 财新社热榜（由 HOTLIST_SOURCE 决定）
-#   - 3,4 = 东方财富新闻（始终为 eastmoney）
+# 墨水屏共 4 页，默认四页互不重复：
+#   - 1,2 = 第1组来源（默认财新社 HOTLIST_SOURCE）
+#   - 3,4 = 第2组来源（默认东方财富，始终独立抓取）
+#   顶栏标题示例：
+#     Page1 ◆ 章鱼 AI+·财新社 (一)   Page2 ◆ 章鱼 AI+·财新社 (二)
+#     Page3 ◆ 章鱼 AI+·东方财富 (一) Page4 ◆ 章鱼 AI+·东方财富 (二)
 #   若只要 2 页，设 ENABLED_PAGES="1,2"
 #   完整 4 页：ENABLED_PAGES="1,2,3,4"
 ENABLED_PAGES = "1,2,3,4"
@@ -31,13 +34,24 @@ ENABLED_PAGES = "1,2,3,4"
 #   - caixin: 财新社（财新网最新）
 HOTLIST_SOURCE = "caixin"  # 第 1,2 页默认财新社
 
-# 3.1 东方财富细分配置（用于第 3,4 页）
+# 3.1 东方财富细分配置（用于第 3,4 页；若 1,2 也选 eastmoney 则自动换栏目/翻页避免重复）
 EASTMONEY_COLUMN = "345"
 EASTMONEY_BIZ = "web_news_col"
-EASTMONEY_PAGE_SIZE = 20
+EASTMONEY_PAGE_SIZE = 24
+# 当第1,2页也是 eastmoney 时，第3,4页改用此栏目，保证内容不同
+EASTMONEY_ALT_COLUMN = "344"
 
 # 3.2 财新社配置（用于第 1,2 页）
-CAIXIN_PAGE_SIZE = 20
+CAIXIN_PAGE_SIZE = 24
+
+# 3.3 各来源在顶栏显示的短标签（必须互不相同，保证四页一眼可辨）
+SOURCE_LABELS = {
+    "caixin": "财新社",
+    "eastmoney": "东方财富",
+    "zhihu": "知乎热榜",
+    "bilibili": "B站热搜",
+    "github": "GitHub",
+}
 
 # =====================================================================
 # 🔒 第二部分：核心密钥区（⚠️绝对不要改这里，请在 GitHub Secrets 里配置） 🔒
@@ -283,21 +297,22 @@ def get_caixin_news(page_size=20):
 
 
 # --- 东方财富专用获取 ---
-def get_eastmoney_news(page_size=20, column=None, biz=None):
+def get_eastmoney_news(page_size=20, column=None, biz=None, page_index=1):
     column = column or EASTMONEY_COLUMN
     biz = biz or EASTMONEY_BIZ
+    page_index = int(page_index or 1)
     titles = []
-    print(f"正在从 东方财富 获取数据 (column={column}, biz={biz})...")
+    print(f"正在从 东方财富 获取数据 (column={column}, biz={biz}, page_index={page_index})...")
     timestamp = str(int(time.time() * 1000))
     req_trace_base = str(int(time.time()*1000)) + str(random.randint(100,999))
     api_candidates = [
-        f"https://np-listapi.eastmoney.com/comm/web/getNewsByColumns?client=web&biz={biz}&column={column}&order=1&needInteractData=0&page_index=1&page_size={page_size}&req_trace={req_trace_base}&fields=code,showTime,title,mediaName,summary,image,url,uniqueUrl",
-        f"https://np-listapi.eastmoney.com/comm/web/getNewsByColumns?client=web&biz={biz}&column={column}&order=1&needInteractData=0&page_index=1&page_size={page_size}&req_trace={timestamp}",
-        f"https://np-listapi.eastmoney.com/comm/web/getNewsByColumns?client=web&biz=web_news&column=24&order=1&page_index=1&page_size={page_size}&req_trace={timestamp}",
-        f"https://np-listapi.eastmoney.com/comm/web/getNewsByColumns?client=web&biz=web_news_col&column=344&order=1&needInteractData=0&page_index=1&page_size={page_size}&req_trace={timestamp}",
+        f"https://np-listapi.eastmoney.com/comm/web/getNewsByColumns?client=web&biz={biz}&column={column}&order=1&needInteractData=0&page_index={page_index}&page_size={page_size}&req_trace={req_trace_base}&fields=code,showTime,title,mediaName,summary,image,url,uniqueUrl",
+        f"https://np-listapi.eastmoney.com/comm/web/getNewsByColumns?client=web&biz={biz}&column={column}&order=1&needInteractData=0&page_index={page_index}&page_size={page_size}&req_trace={timestamp}",
+        f"https://np-listapi.eastmoney.com/comm/web/getNewsByColumns?client=web&biz=web_news&column=24&order=1&page_index={page_index}&page_size={page_size}&req_trace={timestamp}",
+        f"https://np-listapi.eastmoney.com/comm/web/getNewsByColumns?client=web&biz=web_news_col&column=344&order=1&needInteractData=0&page_index={page_index}&page_size={page_size}&req_trace={timestamp}",
     ]
     if column != "345":
-        api_candidates.append(f"https://np-listapi.eastmoney.com/comm/web/getNewsByColumns?client=web&biz=web_news_col&column=345&order=1&needInteractData=0&page_index=1&page_size={page_size}&req_trace={timestamp}")
+        api_candidates.append(f"https://np-listapi.eastmoney.com/comm/web/getNewsByColumns?client=web&biz=web_news_col&column=345&order=1&needInteractData=0&page_index={page_index}&page_size={page_size}&req_trace={timestamp}")
 
     for url in api_candidates:
         try:
@@ -395,8 +410,34 @@ def get_eastmoney_news(page_size=20, column=None, biz=None):
             "创新药强势霸屏 三重利好持续发酵 超70万手封单",
             "商务部：初步认定原产于墨西哥和美国的进口碧根果存在倾销",
             "高盛：中国AI板块不存在整体泡沫 三大细分领域最具投资价值",
+            "光伏玻璃龙头提价 产业链景气度回升",
+            "券商中报分化加剧 财富管理成胜负手",
+            "北向资金连续净流入 重点加仓新能源",
+            "工信部：加快推进工业软件国产化替代",
+            "地方债发行提速 基建投资有望回暖",
+            "半导体设备招标回暖 国产替代加速",
+            "消费电子旺季将至 果链公司备货积极",
+            "银行净息差企稳 板块估值修复可期",
+            "保险负债端改善 权益市场弹性加大",
+            "航运运价震荡 关注旺季需求变化",
+            "有色金属价格走强 铜铝库存持续去化",
+            "军工订单落地加快 产业链景气上行",
+            "传媒游戏版号常态化 龙头估值修复",
+            "农业种植端受天气扰动 关注价格弹性",
+            "家电以旧换新政策加码 内销有望改善",
+            "汽车销量环比回升 智能化成竞争焦点",
+            "地产销售边际企稳 优质房企融资改善",
+            "旅游出行数据回暖 暑期消费表现亮眼",
+            "教育培训规范发展 职业教育景气向上",
+            "环保督察趋严 运营类资产价值凸显",
         ]
-        titles = sample[:page_size]
+        # page_index / 不同栏目错开切片，避免 1,2 与 3,4 在离线兜底时撞同一批标题
+        col_shift = {"345": 0, "344": 8, "340": 16}.get(str(column), 0)
+        start = col_shift + max(0, (page_index - 1) * 10)
+        start = start % max(1, len(sample) - 8)
+        titles = sample[start:start + page_size]
+        if len(titles) < page_size:
+            titles = titles + sample[: page_size - len(titles)]
 
     seen = set()
     uniq = []
@@ -435,16 +476,144 @@ def get_hotlist_data(source, page_size=20):
         if source == "eastmoney":
             try:
                 titles = get_eastmoney_news(page_size=page_size)
-            except:
+            except Exception:
                 titles = ["数据获取失败，请检查网络或东方财富接口"] * 10
         elif source == "caixin":
             try:
                 titles = get_caixin_news(page_size=page_size)
-            except:
+            except Exception:
                 titles = ["数据获取失败，请检查网络或财新接口"] * 10
         else:
             titles = ["数据获取失败，请检查配置"] * 10
     return titles[:page_size]
+
+
+def source_label(source, override=None):
+    """顶栏短标签：优先 override，否则用 SOURCE_LABELS，保证不同来源显示不同。"""
+    if override:
+        return override
+    return SOURCE_LABELS.get(source, source or "资讯")
+
+
+def wrap_text_by_pixels(draw, text, font, max_width):
+    lines = []
+    current_line = ""
+    for char in text:
+        test_line = current_line + char
+        try:
+            w = draw.textlength(test_line, font=font)
+        except AttributeError:
+            w = draw.textbbox((0, 0), test_line, font=font)[2]
+        if w <= max_width:
+            current_line = test_line
+        else:
+            lines.append(current_line)
+            current_line = char
+    if current_line:
+        lines.append(current_line)
+    return lines
+
+
+def draw_news_list(draw, page_title, items, start_idx):
+    """
+    在 400x300 画布上绘制新闻列表。
+    返回本页结束后的下一条索引（供下一页接续，保证同来源两页内容不重叠）。
+    """
+    draw.rounded_rectangle([(10, 10), (390, 45)], radius=8, fill=0)
+    # 标题过长时截断，避免溢出圆角条
+    title_text = page_title
+    try:
+        while draw.textlength(title_text, font=font_title) > 360 and len(title_text) > 4:
+            title_text = title_text[:-1]
+        if title_text != page_title:
+            title_text = title_text[:-1] + "…"
+    except Exception:
+        title_text = page_title[:14]
+    draw.text((20, 15), title_text, font=font_title, fill=255)
+
+    y, last_idx = 55, start_idx
+    item_gap = 12
+    line_height = 23
+    for i in range(start_idx, len(items)):
+        lines = wrap_text_by_pixels(draw, items[i], font_item, max_width=340)
+        required_h = len(lines) * line_height
+        if y + required_h > 295:
+            break
+        current_num = i + 1  # 同来源内连续编号：1,2页 1..N；3,4页另起 1..N
+        draw.rounded_rectangle([(10, y), (36, y + 24)], radius=6, fill=0)
+        num_x = 18 if current_num < 10 else 11
+        draw.text((num_x, y + 3), str(current_num), font=font_small, fill=255)
+        curr_y = y + 1
+        for line in lines:
+            draw.text((45, curr_y), line, font=font_item, fill=0)
+            curr_y += line_height
+        y += max(24, required_h) + item_gap
+        last_idx = i + 1
+        if y < 290:
+            draw.line([(45, y - item_gap / 2), (380, y - item_gap / 2)], fill=0, width=1)
+    return last_idx
+
+
+def dedupe_titles(titles, exclude=None):
+    """保序去重；exclude 用于剔除已在其他页出现过的标题，保证四页内容互不相同。"""
+    exclude = set(exclude or [])
+    seen = set()
+    out = []
+    for t in titles:
+        t = (t or "").strip()
+        if not t or t in seen or t in exclude:
+            continue
+        seen.add(t)
+        out.append(t)
+    return out
+
+
+def make_page_header(label, part):
+    """
+    顶栏文案：主标题「章鱼 AI+」+ 来源标签 + 分页序号
+    例：◆ 章鱼 AI+·财新社 (一)
+    过长时 draw_news_list 会按像素截断。
+    """
+    main = (BOARD_TITLE or "").strip() or "章鱼 AI+"
+    label = (label or "").strip()
+    if label and label != main:
+        return f"◆ {main}·{label} ({part})"
+    return f"◆ {main} ({part})"
+
+
+def render_two_pages(titles, page_ids, label, part_names=("一", "二"), dry_run=False):
+    """
+    把同一来源的 titles 连续分页画到 page_ids（通常是 [1,2] 或 [3,4]）。
+    - 顶栏：◆ 章鱼 AI+·{label} (一/二)  —— 主标题统一 + 来源标签区分四页
+    - 内容：第 N+1 页从上一页结束处接续，同来源两页条目不重叠
+    返回本页组实际用到的标题列表（供跨组去重）。
+    """
+    used = []
+    if not page_ids:
+        return used
+    next_s = 0
+    enabled = [str(p) for p in page_ids if str(p) in ENABLED_PAGES]
+    if not enabled:
+        return used
+
+    for i, pid in enumerate(enabled):
+        part = part_names[i] if i < len(part_names) else str(i + 1)
+        page_title = make_page_header(label, part)
+        print(f"生成 Page {pid}: {page_title}  [条目起点 index={next_s}]")
+        img = Image.new("1", (400, 300), color=255)
+        start_index = next_s
+        # 若本页是组内第一页且被单独启用，从 0 开始；否则接续
+        if i == 0:
+            start_index = 0
+        end_index = draw_news_list(ImageDraw.Draw(img), page_title, titles, start_index)
+        # 防御：若本页一个条目都没画上（数据不够），尽量向后找剩余
+        if end_index <= start_index and start_index < len(titles):
+            # 仍画空页也 push，避免设备残留旧图；但尽量提示
+            print(f"  ⚠️ Page {pid} 从 index={start_index} 起已无足够条目可画")
+        used.extend(titles[start_index:end_index])
+        next_s = end_index
+        push_image(img, pid, dry_run=dry_run)
+    return used
 
 
 # --- 任务：热搜看板（1,2页，默认财新社） ---
@@ -453,160 +622,92 @@ def task_hotlist(dry_run=False, source_override=None, title_override=None):
     if "1" not in ENABLED_PAGES and "2" not in ENABLED_PAGES:
         return []
 
-    # 标题栏统一显示 BOARD_TITLE；title_override 可临时覆盖
-    if title_override:
-        title_display = title_override
-    else:
-        title_display = BOARD_TITLE
+    label = source_label(effective_source, override=title_override)
+    # 多抓一些，确保两页都能填满且互不重叠
+    titles = get_hotlist_data(effective_source, page_size=max(CAIXIN_PAGE_SIZE, 24))
+    titles = dedupe_titles(titles)
+    print(f"第1-2页来源={effective_source} 标签=「{label}」 共 {len(titles)} 条（去重后）")
 
-    titles = get_hotlist_data(effective_source, page_size=20)
+    used = render_two_pages(
+        titles,
+        page_ids=["1", "2"],
+        label=label,
+        part_names=("一", "二"),
+        dry_run=dry_run,
+    )
+    return used  # 返回已用标题，供第3-4页跨组去重
 
-    def wrap_text_by_pixels(draw, text, font, max_width):
-        lines = []
-        current_line = ""
-        for char in text:
-            test_line = current_line + char
-            try:
-                w = draw.textlength(test_line, font=font)
-            except AttributeError:
-                w = draw.textbbox((0,0), test_line, font=font)[2]
-            if w <= max_width:
-                current_line = test_line
-            else:
-                lines.append(current_line)
-                current_line = char
-        if current_line:
-            lines.append(current_line)
-        return lines
-
-    def draw_list(draw, page_title, items, start_idx):
-        draw.rounded_rectangle([(10, 10), (390, 45)], radius=8, fill=0)
-        draw.text((20, 15), page_title, font=font_title, fill=255)
-        y, last_idx = 55, start_idx
-        item_gap = 12
-        line_height = 23
-        for i in range(start_idx, len(items)):
-            lines = wrap_text_by_pixels(draw, items[i], font_item, max_width=340)
-            required_h = len(lines) * line_height
-            if y + required_h > 295:
-                break
-            current_num = i + 1
-            draw.rounded_rectangle([(10, y), (36, y+24)], radius=6, fill=0)
-            num_x = 18 if current_num < 10 else 11
-            draw.text((num_x, y+3), str(current_num), font=font_small, fill=255)
-            curr_y = y + 1
-            for line in lines:
-                draw.text((45, curr_y), line, font=font_item, fill=0)
-                curr_y += line_height
-            y += max(24, required_h) + item_gap
-            last_idx = i + 1
-            if y < 290:
-                draw.line([(45, y - item_gap/2), (380, y - item_gap/2)], fill=0, width=1)
-        return last_idx
-
-    next_s = 0
-    if "1" in ENABLED_PAGES:
-        print(f"生成 Page 1: {title_display} (一)...")
-        img1 = Image.new('1', (400, 300), color=255)
-        next_s = draw_list(ImageDraw.Draw(img1), f"◆ {title_display} (一)", titles, 0)
-        push_image(img1, 1, dry_run=dry_run)
-
-    if "2" in ENABLED_PAGES:
-        print(f"生成 Page 2: {title_display} (二)...")
-        img2 = Image.new('1', (400, 300), color=255)
-        start_index = next_s if "1" in ENABLED_PAGES else 7
-        # 如果 titles 只有 20 条且 1,2 已用完 10 条左右，2页会自动接续
-        # 如果 titles 有 40 条（caixin + 4页模式），2页也接续前20范围内
-        draw_list(ImageDraw.Draw(img2), f"◆ {title_display} (二)", titles, start_index)
-        push_image(img2, 2, dry_run=dry_run)
-
-    return titles  # 返回供财新分页复用
 
 # --- 任务：东方财富看板（3,4页） ---
-def task_eastmoney(dry_run=False, title_override=None):
+def task_eastmoney(dry_run=False, title_override=None, exclude_titles=None, hotlist_source=None):
     """
     东方财富两页：Page 3 和 Page 4
-    - 独立抓取东方财富财经新闻 20 条
+    - 独立抓取，顶栏固定显示「东方财富」，与第1-2页来源标签不同
+    - 若第1-2页也是 eastmoney：自动换栏目（ALT）并翻到第2页 API，再剔除 exclude，保证四页内容都不重复
     """
     if "3" not in ENABLED_PAGES and "4" not in ENABLED_PAGES:
-        return
+        return []
 
-    titles = get_eastmoney_news(page_size=EASTMONEY_PAGE_SIZE)
+    hotlist_source = hotlist_source or HOTLIST_SOURCE
+    exclude_titles = exclude_titles or []
 
-    title_display = title_override if title_override else BOARD_TITLE
+    # 默认栏目；若与 1,2 页同源则改用备用栏目 + 翻页
+    column = EASTMONEY_COLUMN
+    page_index = 1
+    if hotlist_source == "eastmoney":
+        column = EASTMONEY_ALT_COLUMN or "344"
+        page_index = 2
+        print(f"  ℹ️ 第1-2页已是东方财富，第3-4页改用栏目 {column} / page_index={page_index} 避免重复")
 
-    def wrap_text_by_pixels(draw, text, font, max_width):
-        lines = []
-        current_line = ""
-        for char in text:
-            test_line = current_line + char
-            try:
-                w = draw.textlength(test_line, font=font)
-            except AttributeError:
-                w = draw.textbbox((0,0), test_line, font=font)[2]
-            if w <= max_width:
-                current_line = test_line
-            else:
-                lines.append(current_line)
-                current_line = char
-        if current_line:
-            lines.append(current_line)
-        return lines
+    raw = get_eastmoney_news(
+        page_size=max(EASTMONEY_PAGE_SIZE, 24),
+        column=column,
+        biz=EASTMONEY_BIZ,
+        page_index=page_index,
+    )
+    titles = dedupe_titles(raw, exclude=exclude_titles)
 
-    def draw_list(draw, page_title, items, start_idx):
-        draw.rounded_rectangle([(10, 10), (390, 45)], radius=8, fill=0)
-        draw.text((20, 15), page_title, font=font_title, fill=255)
-        y, last_idx = 55, start_idx
-        item_gap = 12
-        line_height = 23
-        for i in range(start_idx, len(items)):
-            lines = wrap_text_by_pixels(draw, items[i], font_item, max_width=340)
-            required_h = len(lines) * line_height
-            if y + required_h > 295:
-                break
-            current_num = i + 1 + (20 if start_idx >= 10 else 0)  # 3,4页序号延续20+
-            # 但为保持与1,2区分，3页序号从1开始也可；这里用真实序号更直观还是从1开始？按财新独立榜从1开始
-            current_num_display = i + 1
-            draw.rounded_rectangle([(10, y), (36, y+24)], radius=6, fill=0)
-            num_x = 18 if current_num_display < 10 else 11
-            draw.text((num_x, y+3), str(current_num_display), font=font_small, fill=255)
-            curr_y = y + 1
-            for line in lines:
-                draw.text((45, curr_y), line, font=font_item, fill=0)
-                curr_y += line_height
-            y += max(24, required_h) + item_gap
-            last_idx = i + 1
-            if y < 290:
-                draw.line([(45, y - item_gap/2), (380, y - item_gap/2)], fill=0, width=1)
-        return last_idx
+    # 若去重后不够填两页，再尝试另一栏目补齐
+    if len(titles) < 12:
+        alt_col = "340" if column != "340" else "345"
+        print(f"  ℹ️ 去重后仅 {len(titles)} 条，尝试栏目 {alt_col} 补齐...")
+        more = get_eastmoney_news(page_size=24, column=alt_col, page_index=1)
+        titles = dedupe_titles(titles + more, exclude=exclude_titles)
 
-    next_s = 0
-    if "3" in ENABLED_PAGES:
-        print(f"生成 Page 3: {title_display} (一)...")
-        img3 = Image.new('1', (400, 300), color=255)
-        next_s = draw_list(ImageDraw.Draw(img3), f"◆ {title_display} (一)", titles, 0)
-        push_image(img3, 3, dry_run=dry_run)
+    # 顶栏标签必须与第1-2页不同；同源 eastmoney 时按栏目区分
+    col_labels = {"345": "东财导读", "344": "东财要闻", "340": "东财股市"}
+    if hotlist_source == "eastmoney":
+        label = col_labels.get(str(column), f"东财{column}")
+    elif title_override:
+        # 自定义标题只作用于 1-2 页；3-4 固定来源名
+        label = SOURCE_LABELS.get("eastmoney", "东方财富")
+    else:
+        label = source_label("eastmoney")
 
-    if "4" in ENABLED_PAGES:
-        print(f"生成 Page 4: {title_display} (二)...")
-        img4 = Image.new('1', (400, 300), color=255)
-        start_index = next_s if "3" in ENABLED_PAGES else 7
-        draw_list(ImageDraw.Draw(img4), f"◆ {title_display} (二)", titles, start_index)
-        push_image(img4, 4, dry_run=dry_run)
+    print(f"第3-4页来源=eastmoney 标签=「{label}」 共 {len(titles)} 条（已剔除与1-2页重复）")
+
+    used = render_two_pages(
+        titles,
+        page_ids=["3", "4"],
+        label=label,
+        part_names=("一", "二"),
+        dry_run=dry_run,
+    )
+    return used
 
 
 # ================= 主程序 =================
 def parse_args():
-    parser = argparse.ArgumentParser(description="极趣墨水屏 章鱼AI全景分析看板 - 1,2财新 + 3,4东方财富")
+    parser = argparse.ArgumentParser(description="极趣墨水屏 章鱼 AI+ 看板 - 1,2财新 + 3,4东方财富（四页内容互不重复）")
     parser.add_argument("--source", dest="source", type=str, default=None,
-                        help="热搜源: zhihu/bilibili/github/eastmoney/caixin (默认跟随 HOTLIST_SOURCE，默认 caixin)")
+                        help="第1-2页热搜源: zhihu/bilibili/github/eastmoney/caixin (默认 caixin)")
     parser.add_argument("--pages", dest="pages", type=str, default=None,
                         help="覆盖推送页面，例如 \"1,2\" 仅推财新两页，\"1,2,3,4\" 推财新+东方财富四页")
     parser.add_argument("--dry-run", action="store_true", help="仅本地生成预览图，不推送到 Zectrix")
     parser.add_argument("--east-column", dest="east_column", type=str, default=None,
-                        help="东方财富栏目ID，默认345（财经导读）")
+                        help="东方财富栏目ID（第3-4页），默认345（财经导读）")
     parser.add_argument("--title", dest="title", type=str, default=None,
-                        help="自定义推送标题，例如 \"财新社·深度\"，将覆盖默认标题")
+                        help="仅覆盖第1-2页顶栏来源标签；第3-4页仍显示「东方财富」以区分")
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -614,15 +715,15 @@ if __name__ == "__main__":
 
     if args.source:
         HOTLIST_SOURCE = args.source
-        print(f"🔧 命令行覆盖热搜源: {HOTLIST_SOURCE}")
+        print(f"🔧 命令行覆盖第1-2页热搜源: {HOTLIST_SOURCE}")
     if args.pages:
         ENABLED_PAGES = args.pages
         print(f"🔧 命令行覆盖推送页面: {ENABLED_PAGES}")
     if args.east_column:
         EASTMONEY_COLUMN = args.east_column
-        print(f"🔧 东方财富栏目覆盖: {EASTMONEY_COLUMN}")
+        print(f"🔧 东方财富栏目覆盖(第3-4页): {EASTMONEY_COLUMN}")
     if args.title:
-        print(f"🔧 自定义标题: {args.title}")
+        print(f"🔧 第1-2页自定义标签: {args.title}")
 
     dry_run_mode = args.dry_run
     if not API_KEY or not MAC_ADDRESS:
@@ -631,7 +732,7 @@ if __name__ == "__main__":
             print("   如需真正推送到墨水屏，请先设置：")
             print("   export ZECTRIX_API_KEY=你的Key")
             print("   export ZECTRIX_MAC=AA:BB:CC:DD:EE:FF")
-            print("   python main.py --source caixin --dry-run")
+            print("   python main.py --pages 1,2,3,4 --dry-run")
             dry_run_mode = True
         else:
             print("🔍 dry_run 模式：仅生成本地预览图")
@@ -641,16 +742,27 @@ if __name__ == "__main__":
         else:
             print(f"🚀 已配置 Zectrix 设备 {MAC_ADDRESS}，将执行真实推送")
 
-    print("🚀 开始执行墨水屏推送任务（章鱼AI全景分析看板）...")
-    print(f"   热搜源: {HOTLIST_SOURCE} | 页面: {ENABLED_PAGES} | 模式: {'dry_run' if dry_run_mode else 'push'}")
+    print(f"🚀 开始执行墨水屏推送任务（主标题: {BOARD_TITLE}）...")
+    print(f"   第1-2页源: {HOTLIST_SOURCE} | 页面: {ENABLED_PAGES} | 模式: {'dry_run' if dry_run_mode else 'push'}")
+    print("   分页策略: 主标题统一「章鱼 AI+」；1-2 与 3-4 不同来源标签；同来源接续；跨组去重")
 
-    # 执行热榜任务（1,2页，默认财新社）
-    task_hotlist(dry_run=dry_run_mode, source_override=HOTLIST_SOURCE, title_override=args.title)
-    # 执行东方财富任务（3,4页）
-    task_eastmoney(dry_run=dry_run_mode, title_override=None)
+    # 1,2 页（默认财新社）
+    used_12 = task_hotlist(
+        dry_run=dry_run_mode,
+        source_override=HOTLIST_SOURCE,
+        title_override=args.title,
+    )
+    # 3,4 页（东方财富），剔除 1,2 已用标题，保证四页内容都不同
+    task_eastmoney(
+        dry_run=dry_run_mode,
+        title_override=None,
+        exclude_titles=used_12,
+        hotlist_source=HOTLIST_SOURCE,
+    )
 
     print("🎉 所有任务执行完毕！")
     if dry_run_mode:
-        print("💡 预览图已生成：page_*.png 请在文件浏览器查看效果")
-        print("   - 若 ENABLED_PAGES=1,2 : 生成 page_1.png, page_2.png 为财新两页")
-        print("   - 若 ENABLED_PAGES=1,2,3,4 : 1,2为财新热榜，3,4为东方财富")
+        print("💡 预览图已生成：page_*.png")
+        print(f"   Page1 ◆ {BOARD_TITLE}·财新社 (一)  | Page2 ◆ {BOARD_TITLE}·财新社 (二)")
+        print(f"   Page3 ◆ {BOARD_TITLE}·东方财富 (一)| Page4 ◆ {BOARD_TITLE}·东方财富 (二)")
+        print("   四页主标题统一 + 来源标签/正文互不相同")
