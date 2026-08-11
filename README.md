@@ -57,9 +57,9 @@ python main.py --pages 1,2 --dry-run       # 仅财新两页
 - `ENABLED_PAGES`：`1,2,3,4`（财新+东方财富四页）或 `1,2`（仅财新两页）
 
 ### 5. Actions 频率
-`.github/workflows/run.yml` 中 `cron`，UTC。
+以根目录 **`w.yml`** 为准（工作流文件，可复制内容到 `.github/workflows/run.yml` 生效），`cron` 为 UTC 时间。
 当前默认：**每 30 分钟自动运行一次**（`*/30 * * * *`，即北京时间每个整点与半点），自动抓取数据并推送看板。
-如需调整节奏，改 `cron` 即可（GitHub Actions 最短 5 分钟一次）。工作流已加防重叠保护，若上一次还没跑完会排队等待，不会并发推送。
+如需调整节奏，改 `w.yml` 里的 `cron` 即可（GitHub Actions 最短 5 分钟一次），改完复制到 `.github/workflows/run.yml`。工作流已加防重叠保护，若上一次还没跑完会排队等待，不会并发推送。
 
 ### 6. 手动运行
 Actions → 章鱼 AI+ 看板 → Run workflow
