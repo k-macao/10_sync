@@ -1,8 +1,8 @@
-# 极趣墨水屏 章鱼AI全景分析看板
+# 极趣墨水屏 章鱼 AI+ 看板
 
 **⏱️ 5分钟复刻，专属桌面财经资讯看板。**
 
-本项目为极趣墨水屏 (Zectrix) 打造，看板标题为 **章鱼AI全景分析**，内容为 **第1-2页财新社 + 第3-4页东方财富**，共 4 页财经资讯看板。
+本项目为极趣墨水屏 (Zectrix) 打造，看板主标题为 **章鱼 AI+**，内容为 **第1-2页财新社 + 第3-4页东方财富**，共 4 页财经资讯看板。
 
 <img src="./images/preview.jpg" width="60%">
 
@@ -10,15 +10,23 @@
 
 ## 📌 看板显示内容（已更新）
 
-适配 400×300 分辨率，共 4 页：
+适配 400×300 分辨率，共 4 页（顶栏标签 + 正文均互不重复）：
 
-- **第 1-2 页：财新社热榜**（`caixin`）– 财新社（财新网）财经新闻两页。
-  - `python main.py --pages 1,2 --dry-run` → 财新两页预览
-- **第 3-4 页：东方财富**（`eastmoney`）– 东方财富财经新闻两页。
-  - `python main.py --source eastmoney --pages 1,2 --dry-run` → 东方财富两页预览
+| 页 | 顶栏 | 数据源 | 内容策略 |
+|---|---|---|---|
+| 1 | ◆ 章鱼 AI+·财新社 (一) | `caixin` | 财新前半 |
+| 2 | ◆ 章鱼 AI+·财新社 (二) | `caixin` | 接续第1页，条目不重叠 |
+| 3 | ◆ 章鱼 AI+·东方财富 (一) | `eastmoney` | 独立抓取 |
+| 4 | ◆ 章鱼 AI+·东方财富 (二) | `eastmoney` | 接续第3页；并剔除与1-2重复标题 |
 
-> ✅ 本分支已按需求：**标题改为「章鱼AI全景分析」**，**新增东方财富两页**（3,4），**1,2 保持财新社**。
-> 默认配置：`ENABLED_PAGES="1,2,3,4"` = 财新两页 + 东方财富两页。
+```bash
+python main.py --pages 1,2,3,4 --dry-run   # 四页全预览
+python main.py --pages 1,2 --dry-run       # 仅财新两页
+```
+
+> ✅ 主标题固定 **章鱼 AI+**；顶栏再拼来源标签区分四页，避免原先 1=3、2=4 看起来相同。
+> 若第1-2页也选 `eastmoney`，第3-4页自动换栏目/翻页 + 跨组去重，仍保证四页不同。
+> 默认：`ENABLED_PAGES="1,2,3,4"`。
 
 ### 数据源说明
 - **财新社（第1,2页）**：优先 `gateway.caixin.com/api/dataplatform/scroll/index` / `mapiv5.caixin.com/m/api/getWapIndexListByPage`，参考 RSSHub 财新路由实现，失败回退 HTML，最后内置示例兜底，沙箱离线亦可预览。
@@ -44,7 +52,7 @@
 
 ### 4. 自定义
 编辑 `main.py` 顶部：
-- `BOARD_TITLE`：看板标题，默认 `章鱼AI全景分析`
+- `BOARD_TITLE`：看板主标题，默认 `章鱼 AI+`
 - `HOTLIST_SOURCE`：第 1,2 页源，`caixin`（默认）/ `eastmoney` / `zhihu` / `bilibili` / `github`
 - `ENABLED_PAGES`：`1,2,3,4`（财新+东方财富四页）或 `1,2`（仅财新两页）
 
@@ -52,7 +60,7 @@
 `.github/workflows/run.yml` 中 `cron`，UTC。
 
 ### 6. 手动运行
-Actions → 章鱼AI全景分析看板 → Run workflow
+Actions → 章鱼 AI+ 看板 → Run workflow
 - `hotlist_source`：第 1,2 页源 caixin/eastmoney/zhihu...
 - `pages`：`1,2,3,4`（默认）或 `1,2`
 - `dry_run`：预览
