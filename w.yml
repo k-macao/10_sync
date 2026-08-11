@@ -15,7 +15,7 @@ name: 章鱼 AI+ 看板
 
 on:
   schedule:
-    - cron: '0 * * * *'  # 每小时 (UTC) = 北京时间每小时整点
+    - cron: '*/30 * * * *'  # 每30分钟 (UTC) = 北京时间每个整点与半点（如 8:00 / 8:30）
   workflow_dispatch:
     inputs:
       hotlist_source:
@@ -58,6 +58,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    concurrency:
+      group: octopus-board
+      cancel-in-progress: false
     steps:
       - name: 获取代码
         uses: actions/checkout@v3
