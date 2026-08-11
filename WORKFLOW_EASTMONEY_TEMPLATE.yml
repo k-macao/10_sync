@@ -5,7 +5,7 @@ name: 墨水屏综合看板推送
 
 on:
   schedule:
-    - cron: '0 * * * *'  # 每小时运行一次
+    - cron: '*/30 * * * *'  # 每30分钟运行一次
   workflow_dispatch:
     inputs:
       hotlist_source:
@@ -47,6 +47,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    concurrency:
+      group: octopus-board
+      cancel-in-progress: false
     steps:
       - name: 获取代码
         uses: actions/checkout@v3
