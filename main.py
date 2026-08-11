@@ -12,29 +12,32 @@ from datetime import datetime, timedelta
 # 🌟 第一部分：用户自定义区（想改什么，直接在这里改文字和数字） 🌟
 # =====================================================================
 
-# 1. 控制推送哪几页？
-# 墨水屏共 4 页（已去除日历/天气，改为热榜+财新）：
-#   - 1,2 = 热榜（由 HOTLIST_SOURCE 决定，可为 caixin 即财新）
-#   - 3,4 = 财新社专用（始终为财新，若只需要两页可设为 1,2）
-#   若只想要财新两页，设 ENABLED_PAGES="1,2" 且 HOTLIST_SOURCE="caixin"
-#   若想要 4 页：1,2 热榜 + 3,4 财新，设 ENABLED_PAGES="1,2,3,4"
-ENABLED_PAGES = "1,2"
+# 1. 看板标题（显示在每页顶部标题栏）
+BOARD_TITLE = "章鱼AI全景分析"
 
-# 2. 热搜源设置：目前支持 'zhihu', 'bilibili', 'github', 'eastmoney', 'caixin'
+# 2. 控制推送哪几页？
+# 墨水屏共 4 页：
+#   - 1,2 = 财新社热榜（由 HOTLIST_SOURCE 决定）
+#   - 3,4 = 东方财富新闻（始终为 eastmoney）
+#   若只要 2 页，设 ENABLED_PAGES="1,2"
+#   完整 4 页：ENABLED_PAGES="1,2,3,4"
+ENABLED_PAGES = "1,2,3,4"
+
+# 3. 第 1,2 页热搜源设置：支持 'zhihu', 'bilibili', 'github', 'eastmoney', 'caixin'
 #   - zhihu: 知乎热榜
 #   - bilibili: B站热搜
 #   - github: GitHub热门仓库
 #   - eastmoney: 东方财富财经新闻
 #   - caixin: 财新社（财新网最新）
-HOTLIST_SOURCE = "caixin"  # 已按需求默认改为财新社
+HOTLIST_SOURCE = "caixin"  # 第 1,2 页默认财新社
 
-# 2.1 东方财富细分配置（仅当 HOTLIST_SOURCE=eastmoney 时生效）
+# 3.1 东方财富细分配置（用于第 3,4 页）
 EASTMONEY_COLUMN = "345"
 EASTMONEY_BIZ = "web_news_col"
 EASTMONEY_PAGE_SIZE = 20
 
-# 2.2 财新社配置（始终用于 3,4 页；若 HOTLIST_SOURCE=caixin 也用于 1,2 页）
-CAIXIN_PAGE_SIZE = 40  # 为兼容 4 页场景，默认抓取 40 条；2 页场景下自动取 20
+# 3.2 财新社配置（用于第 1,2 页）
+CAIXIN_PAGE_SIZE = 20
 
 # =====================================================================
 # 🔒 第二部分：核心密钥区（⚠️绝对不要改这里，请在 GitHub Secrets 里配置） 🔒
@@ -444,31 +447,19 @@ def get_hotlist_data(source, page_size=20):
     return titles[:page_size]
 
 
-# --- 任务：热搜看板（1,2页） ---
+# --- 任务：热搜看板（1,2页，默认财新社） ---
 def task_hotlist(dry_run=False, source_override=None, title_override=None):
     effective_source = source_override or HOTLIST_SOURCE
     if "1" not in ENABLED_PAGES and "2" not in ENABLED_PAGES:
         return []
 
-    source_map = {"zhihu": "知乎热榜", "bilibili": "B站热搜", "github": "GitHub 热门", "eastmoney": "东方财富", "caixin": "财新社"}
-    # 根据 ENABLED_PAGES 数量决定抓取条数：若启用 3,4 页，1,2 页只需要 20 条；否则仍抓 20
-    # 为统一，若源为 caixin 且启用了 3,4 页，task_hotlist 抓前20，task_caixin 抓后20（或独立抓）
-    # 这里先抓 20（或40如果需要）由调用方控制，但默认 20 对 1,2 足够
-    need_size = 20
-    # 如果 HOTLIST_SOURCE=caixin 且同时启用 3,4 页，为了避免重复，抓 40 条分给 1,2 和 3,4
-    if effective_source == "caixin" and ("3" in ENABLED_PAGES or "4" in ENABLED_PAGES):
-        need_size = 40
-
-    titles = get_hotlist_data(effective_source, page_size=need_size)
-
+    # 标题栏统一显示 BOARD_TITLE；title_override 可临时覆盖
     if title_override:
         title_display = title_override
     else:
-        title_display = source_map.get(effective_source, "热门看板")
-        if effective_source == "eastmoney":
-            title_display = "东方财富"
-        elif effective_source == "caixin":
-            title_display = "财新社"
+        title_display = BOARD_TITLE
+
+    titles = get_hotlist_data(effective_source, page_size=20)
 
     def wrap_text_by_pixels(draw, text, font, max_width):
         lines = []
@@ -531,27 +522,18 @@ def task_hotlist(dry_run=False, source_override=None, title_override=None):
 
     return titles  # 返回供财新分页复用
 
-# --- 任务：财新社看板（3,4页） ---
-def task_caixin(dry_run=False, title_override=None, shared_titles=None):
+# --- 任务：东方财富看板（3,4页） ---
+def task_eastmoney(dry_run=False, title_override=None):
     """
-    财新社两页：Page 3 和 Page 4
-    - 若 shared_titles 是 HOTLIST_SOURCE=caixin 时抓的 40 条，则直接切片 20-40 给 3,4 页，避免重复请求
-    - 否则独立抓取 20 条
+    东方财富两页：Page 3 和 Page 4
+    - 独立抓取东方财富财经新闻 20 条
     """
     if "3" not in ENABLED_PAGES and "4" not in ENABLED_PAGES:
         return
 
-    # 决定标题来源
-    if shared_titles and len(shared_titles) >= 30:
-        # 使用共享列表的后 20 条作为财新 3,4 页
-        titles = shared_titles[20:40] if len(shared_titles) >= 40 else shared_titles[10:30]
-        # 如果切片后仍不足 20，补抓
-        if len(titles) < 10:
-            titles = get_caixin_news(page_size=20)
-    else:
-        titles = get_caixin_news(page_size=20)
+    titles = get_eastmoney_news(page_size=EASTMONEY_PAGE_SIZE)
 
-    title_display = title_override if title_override else "财新社"
+    title_display = title_override if title_override else BOARD_TITLE
 
     def wrap_text_by_pixels(draw, text, font, max_width):
         lines = []
@@ -615,11 +597,11 @@ def task_caixin(dry_run=False, title_override=None, shared_titles=None):
 
 # ================= 主程序 =================
 def parse_args():
-    parser = argparse.ArgumentParser(description="极趣墨水屏 财新社看板 - 已去除日历天气，新增财新两页")
+    parser = argparse.ArgumentParser(description="极趣墨水屏 章鱼AI全景分析看板 - 1,2财新 + 3,4东方财富")
     parser.add_argument("--source", dest="source", type=str, default=None,
                         help="热搜源: zhihu/bilibili/github/eastmoney/caixin (默认跟随 HOTLIST_SOURCE，默认 caixin)")
     parser.add_argument("--pages", dest="pages", type=str, default=None,
-                        help="覆盖推送页面，例如 \"1,2\" 仅推两页财新，\"1,2,3,4\" 推四页")
+                        help="覆盖推送页面，例如 \"1,2\" 仅推财新两页，\"1,2,3,4\" 推财新+东方财富四页")
     parser.add_argument("--dry-run", action="store_true", help="仅本地生成预览图，不推送到 Zectrix")
     parser.add_argument("--east-column", dest="east_column", type=str, default=None,
                         help="东方财富栏目ID，默认345（财经导读）")
@@ -659,16 +641,16 @@ if __name__ == "__main__":
         else:
             print(f"🚀 已配置 Zectrix 设备 {MAC_ADDRESS}，将执行真实推送")
 
-    print("🚀 开始执行墨水屏推送任务（已去除日历/天气，改为财新社）...")
+    print("🚀 开始执行墨水屏推送任务（章鱼AI全景分析看板）...")
     print(f"   热搜源: {HOTLIST_SOURCE} | 页面: {ENABLED_PAGES} | 模式: {'dry_run' if dry_run_mode else 'push'}")
 
-    # 执行热榜任务（1,2页）
-    shared = task_hotlist(dry_run=dry_run_mode, source_override=HOTLIST_SOURCE, title_override=args.title)
-    # 执行财新任务（3,4页）
-    task_caixin(dry_run=dry_run_mode, title_override=None, shared_titles=shared)
+    # 执行热榜任务（1,2页，默认财新社）
+    task_hotlist(dry_run=dry_run_mode, source_override=HOTLIST_SOURCE, title_override=args.title)
+    # 执行东方财富任务（3,4页）
+    task_eastmoney(dry_run=dry_run_mode, title_override=None)
 
     print("🎉 所有任务执行完毕！")
     if dry_run_mode:
         print("💡 预览图已生成：page_*.png 请在文件浏览器查看效果")
         print("   - 若 ENABLED_PAGES=1,2 : 生成 page_1.png, page_2.png 为财新两页")
-        print("   - 若 ENABLED_PAGES=1,2,3,4 : 1,2为热榜，3,4为财新")
+        print("   - 若 ENABLED_PAGES=1,2,3,4 : 1,2为财新热榜，3,4为东方财富")
