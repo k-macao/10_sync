@@ -111,7 +111,7 @@ def wrap_text_by_pixels(draw, text, font, max_width):
     if cur: lines.append(cur)
     return lines
 
-def draw_pages(titles, enabled_pages="1,2", header="财新社"):
+def draw_pages(titles, enabled_pages="1,2", header="章鱼 AI·全景分析"):
     def draw_list(draw, page_title, items, start_idx):
         draw.rounded_rectangle([(10, 10), (390, 45)], radius=8, fill=0)
         draw.text((20, 15), page_title, font=font_title, fill=255)
@@ -139,31 +139,31 @@ def draw_pages(titles, enabled_pages="1,2", header="财新社"):
     enabled=set(enabled_pages.split(","))
     next_s=0
     if "1" in enabled:
-        print(f"生成 Page 1: {header} (一)...")
+        print(f"生成 Page 1: 顶栏「{header}」...")
         img1=Image.new('1',(400,300),color=255)
-        next_s=draw_list(ImageDraw.Draw(img1), f"◆ {header} (一)", titles, 0)
+        next_s=draw_list(ImageDraw.Draw(img1), header, titles, 0)
         img1.save("page_1.png"); files.append("page_1.png")
         print("💾 已保存 page_1.png")
     if "2" in enabled:
-        print(f"生成 Page 2: {header} (二)...")
+        print(f"生成 Page 2: 顶栏「{header}」...")
         img2=Image.new('1',(400,300),color=255)
         start_idx=next_s if "1" in enabled else 7
-        draw_list(ImageDraw.Draw(img2), f"◆ {header} (二)", titles, start_idx)
+        draw_list(ImageDraw.Draw(img2), header, titles, start_idx)
         img2.save("page_2.png"); files.append("page_2.png")
         print("💾 已保存 page_2.png")
     if "3" in enabled:
-        print(f"生成 Page 3: {header} (三)...")
+        print(f"生成 Page 3: 顶栏「{header}」...")
         img3=Image.new('1',(400,300),color=255)
         # 3,4页可复用后20条
         offset = 20 if len(titles)>=40 else next_s
-        draw_list(ImageDraw.Draw(img3), f"◆ {header} (三)", titles, offset)
+        draw_list(ImageDraw.Draw(img3), header, titles, offset)
         img3.save("page_3.png"); files.append("page_3.png")
         print("💾 已保存 page_3.png")
     if "4" in enabled:
-        print(f"生成 Page 4: {header} (四)...")
+        print(f"生成 Page 4: 顶栏「{header}」...")
         img4=Image.new('1',(400,300),color=255)
         start_idx = 30 if len(titles)>=40 else (next_s+7)
-        draw_list(ImageDraw.Draw(img4), f"◆ {header} (四)", titles, start_idx if len(titles)>=40 else 14)
+        draw_list(ImageDraw.Draw(img4), header, titles, start_idx if len(titles)>=40 else 14)
         img4.save("page_4.png"); files.append("page_4.png")
         print("💾 已保存 page_4.png")
     return files
@@ -200,7 +200,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="仅生成本地预览，不推送")
     parser.add_argument("--pages", type=str, default="1,2", help="推送页面，例如 1,2 或 1,2,3,4")
     parser.add_argument("--titles", type=str, default=None, help="自定义标题，用|分隔")
-    parser.add_argument("--title", type=str, default="财新社", help="自定义推送标题")
+    parser.add_argument("--title", type=str, default="章鱼 AI·全景分析", help="顶栏文案（各页统一），默认 \"章鱼 AI·全景分析\"")
     args=parser.parse_args()
 
     if args.titles:

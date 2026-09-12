@@ -152,7 +152,7 @@ def wrap_text_by_pixels(draw, text, font, max_width):
         lines.append(cur)
     return lines
 
-def draw_eastmoney_pages(titles, enabled_pages="1,2", header="东方财富"):
+def draw_eastmoney_pages(titles, enabled_pages="1,2", header="章鱼 AI·全景分析"):
     """生成东方财富墨水屏分页，并返回生成的文件列表"""
     def draw_list(draw, page_title, items, start_idx):
         draw.rounded_rectangle([(10, 10), (390, 45)], radius=8, fill=0)
@@ -183,17 +183,17 @@ def draw_eastmoney_pages(titles, enabled_pages="1,2", header="东方财富"):
     enabled = set(enabled_pages.split(","))
     next_s=0
     if "1" in enabled:
-        print(f"生成 Page 1: {header} (一)...")
+        print(f"生成 Page 1: 顶栏「{header}」...")
         img1=Image.new('1',(400,300),color=255)
-        next_s=draw_list(ImageDraw.Draw(img1), f"◆ {header} (一)", titles, 0)
+        next_s=draw_list(ImageDraw.Draw(img1), header, titles, 0)
         img1.save("page_1.png")
         print("💾 已保存 page_1.png")
         files.append("page_1.png")
     if "2" in enabled:
-        print(f"生成 Page 2: {header} (二)...")
+        print(f"生成 Page 2: 顶栏「{header}」...")
         img2=Image.new('1',(400,300),color=255)
         start_idx=next_s if "1" in enabled else 7
-        draw_list(ImageDraw.Draw(img2), f"◆ {header} (二)", titles, start_idx)
+        draw_list(ImageDraw.Draw(img2), header, titles, start_idx)
         img2.save("page_2.png")
         print("💾 已保存 page_2.png")
         files.append("page_2.png")
@@ -245,7 +245,7 @@ def main():
     parser.add_argument("--column", type=str, default="345", help="东方财富栏目ID，默认345")
     parser.add_argument("--biz", type=str, default="web_news_col", help="东方财富biz参数")
     parser.add_argument("--titles", type=str, default=None, help="自定义标题，用|分隔，例如 \"标题1|标题2|标题3\" ")
-    parser.add_argument("--title", type=str, default="东方财富", help="自定义推送标题，例如 \"章鱼 AI·全景分析\"")
+    parser.add_argument("--title", type=str, default="章鱼 AI·全景分析", help="顶栏文案（两页统一），默认 \"章鱼 AI·全景分析\"")
     parser.add_argument("--header", type=str, default=None, help="同 --title，兼容旧参数")
     args=parser.parse_args()
 
