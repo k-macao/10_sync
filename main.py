@@ -12,16 +12,21 @@ from datetime import datetime, timedelta
 # 🌟 第一部分：用户自定义区（想改什么，直接在这里改文字和数字） 🌟
 # =====================================================================
 
-# 1. 看板主标题（每页顶栏前缀，后接来源标签区分四页）
-BOARD_TITLE = "章鱼 AI+"
+# 1. 看板顶栏文案（四页统一，只显示这一行字）
+BOARD_TITLE = "章鱼 AI·全景分析"
+
+# 1.1 顶栏是否额外拼接来源标签 / 分页序号
+#   默认全部 False → 顶栏只显示 BOARD_TITLE（即「章鱼 AI·全景分析」）
+#   如果想恢复成 “章鱼 AI·全景分析·财新社 (一)” 这类写法，把对应项改成 True
+HEADER_SHOW_SOURCE = False   # True → 顶栏追加 ·财新社 / ·东方财富
+HEADER_SHOW_PART = False     # True → 顶栏追加 (一) / (二)
+HEADER_PREFIX = ""           # 想要小菱形前缀就填 "◆ "
 
 # 2. 控制推送哪几页？
-# 墨水屏共 4 页，默认四页互不重复：
+# 墨水屏共 4 页，默认四页内容互不重复：
 #   - 1,2 = 第1组来源（默认财新社 HOTLIST_SOURCE）
 #   - 3,4 = 第2组来源（默认东方财富，始终独立抓取）
-#   顶栏标题示例：
-#     Page1 ◆ 章鱼 AI+·财新社 (一)   Page2 ◆ 章鱼 AI+·财新社 (二)
-#     Page3 ◆ 章鱼 AI+·东方财富 (一) Page4 ◆ 章鱼 AI+·东方财富 (二)
+#   顶栏标题：四页统一显示「章鱼 AI·全景分析」，仅正文内容不同
 #   若只要 2 页，设 ENABLED_PAGES="1,2"
 #   完整 4 页：ENABLED_PAGES="1,2,3,4"
 ENABLED_PAGES = "1,2,3,4"
@@ -570,15 +575,18 @@ def dedupe_titles(titles, exclude=None):
 
 def make_page_header(label, part):
     """
-    顶栏文案：主标题「章鱼 AI+」+ 来源标签 + 分页序号
-    例：◆ 章鱼 AI+·财新社 (一)
+    顶栏文案：默认四页统一，只显示 BOARD_TITLE（「章鱼 AI·全景分析」）。
+    如需恢复来源标签 / 分页序号，把顶部的 HEADER_SHOW_SOURCE / HEADER_SHOW_PART 改为 True。
     过长时 draw_news_list 会按像素截断。
     """
-    main = (BOARD_TITLE or "").strip() or "章鱼 AI+"
+    main = (BOARD_TITLE or "").strip() or "章鱼 AI·全景分析"
+    text = f"{HEADER_PREFIX}{main}"
     label = (label or "").strip()
-    if label and label != main:
-        return f"◆ {main}·{label} ({part})"
-    return f"◆ {main} ({part})"
+    if HEADER_SHOW_SOURCE and label and label != main:
+        text = f"{text}·{label}"
+    if HEADER_SHOW_PART and part:
+        text = f"{text} ({part})"
+    return text
 
 
 def render_two_pages(titles, page_ids, label, part_names=("一", "二"), dry_run=False):
@@ -707,7 +715,7 @@ def parse_args():
     parser.add_argument("--east-column", dest="east_column", type=str, default=None,
                         help="东方财富栏目ID（第3-4页），默认345（财经导读）")
     parser.add_argument("--title", dest="title", type=str, default=None,
-                        help="仅覆盖第1-2页顶栏来源标签；第3-4页仍显示「东方财富」以区分")
+                        help="覆盖顶栏文案（四页统一），默认「章鱼 AI·全景分析」")
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -723,7 +731,8 @@ if __name__ == "__main__":
         EASTMONEY_COLUMN = args.east_column
         print(f"🔧 东方财富栏目覆盖(第3-4页): {EASTMONEY_COLUMN}")
     if args.title:
-        print(f"🔧 第1-2页自定义标签: {args.title}")
+        BOARD_TITLE = args.title
+        print(f"🔧 顶栏文案覆盖(四页统一): {BOARD_TITLE}")
 
     dry_run_mode = args.dry_run
     if not API_KEY or not MAC_ADDRESS:
@@ -742,15 +751,15 @@ if __name__ == "__main__":
         else:
             print(f"🚀 已配置 Zectrix 设备 {MAC_ADDRESS}，将执行真实推送")
 
-    print(f"🚀 开始执行墨水屏推送任务（主标题: {BOARD_TITLE}）...")
+    print(f"🚀 开始执行墨水屏推送任务（顶栏: {BOARD_TITLE}）...")
     print(f"   第1-2页源: {HOTLIST_SOURCE} | 页面: {ENABLED_PAGES} | 模式: {'dry_run' if dry_run_mode else 'push'}")
-    print("   分页策略: 主标题统一「章鱼 AI+」；1-2 与 3-4 不同来源标签；同来源接续；跨组去重")
+    print(f"   分页策略: 四页顶栏统一「{BOARD_TITLE}」；1-2 与 3-4 不同来源；同来源接续；跨组去重")
 
     # 1,2 页（默认财新社）
     used_12 = task_hotlist(
         dry_run=dry_run_mode,
         source_override=HOTLIST_SOURCE,
-        title_override=args.title,
+        title_override=None,
     )
     # 3,4 页（东方财富），剔除 1,2 已用标题，保证四页内容都不同
     task_eastmoney(
@@ -763,6 +772,5 @@ if __name__ == "__main__":
     print("🎉 所有任务执行完毕！")
     if dry_run_mode:
         print("💡 预览图已生成：page_*.png")
-        print(f"   Page1 ◆ {BOARD_TITLE}·财新社 (一)  | Page2 ◆ {BOARD_TITLE}·财新社 (二)")
-        print(f"   Page3 ◆ {BOARD_TITLE}·东方财富 (一)| Page4 ◆ {BOARD_TITLE}·东方财富 (二)")
-        print("   四页主标题统一 + 来源标签/正文互不相同")
+        print(f"   Page1~Page4 顶栏统一：{BOARD_TITLE}")
+        print("   四页顶栏文案一致，仅正文内容互不相同（1-2财新 / 3-4东方财富）")

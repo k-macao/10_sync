@@ -1,17 +1,17 @@
-# 章鱼 AI+ 看板 — GitHub Actions 工作流
+# 章鱼 AI·全景分析 看板 — GitHub Actions 工作流
 # 路径备忘：可复制本文件内容到 .github/workflows/run.yml
 #
-# 四页布局（主标题统一 + 来源标签区分，正文互不重复）：
-#   Page1 ◆ 章鱼 AI+·财新社 (一)     Page2 ◆ 章鱼 AI+·财新社 (二)
-#   Page3 ◆ 章鱼 AI+·东方财富 (一)   Page4 ◆ 章鱼 AI+·东方财富 (二)
+# 四页布局（顶栏统一，只显示「章鱼 AI·全景分析」；正文互不重复）：
+#   Page1 章鱼 AI·全景分析（财新前半）   Page2 章鱼 AI·全景分析（财新接续）
+#   Page3 章鱼 AI·全景分析（东财前半）   Page4 章鱼 AI·全景分析（东财接续）
 #
 # 参数说明：
-#   --source       仅影响第1-2页；默认 caixin
+#   --source       仅影响第1-2页数据源；默认 caixin
 #   --pages        默认 1,2,3,4（财新两页 + 东方财富两页）
 #   --east-column  第3-4页东方财富栏目，默认 345
-#   --title        仅覆盖第1-2页来源标签；主标题固定为 BOARD_TITLE=章鱼 AI+
+#   --title        覆盖顶栏文案（四页统一）；留空即 BOARD_TITLE=章鱼 AI·全景分析
 #   第3-4页始终独立抓取东方财富，并剔除与1-2页重复的标题
-name: 章鱼 AI+ 看板
+name: 章鱼 AI·全景分析 看板
 
 on:
   schedule:
@@ -35,7 +35,7 @@ on:
         default: '345'
         type: string
       custom_title:
-        description: '覆盖第1-2页来源标签（主标题固定 章鱼 AI+；留空用默认来源名）'
+        description: '覆盖顶栏文案（四页统一；留空即「章鱼 AI·全景分析」）'
         required: false
         default: ''
         type: string
@@ -75,7 +75,7 @@ jobs:
       - name: 安装依赖包
         run: pip install requests pillow zhdate
 
-      - name: 运行！生成并推送（章鱼 AI+ · 1-2财新 + 3-4东方财富）
+      - name: 运行！生成并推送（章鱼 AI·全景分析 · 1-2财新 + 3-4东方财富）
         env:
           ZECTRIX_API_KEY: ${{ secrets.ZECTRIX_API_KEY }}
           ZECTRIX_MAC: ${{ secrets.ZECTRIX_MAC }}
@@ -89,19 +89,14 @@ jobs:
           DRY="${{ inputs.dry_run || 'false' }}"
 
           echo "=========================================="
-          echo " 章鱼 AI+ 看板"
+          echo " 章鱼 AI·全景分析 看板"
           echo "=========================================="
-          echo " 主标题(固定): 章鱼 AI+"
+          echo " 顶栏文案(四页统一): ${TITLE:-章鱼 AI·全景分析}"
           echo " 第1-2页来源:  $SRC"
           echo " 第3-4页来源:  eastmoney (栏目 $COL)"
           echo " 推送页面:     $PAGES"
-          echo " 标签覆盖:     ${TITLE:-'(默认来源名)'}"
           echo " dry_run:      $DRY"
-          echo " 顶栏示例:"
-          echo "   Page1 ◆ 章鱼 AI+·财新社 (一)"
-          echo "   Page2 ◆ 章鱼 AI+·财新社 (二)"
-          echo "   Page3 ◆ 章鱼 AI+·东方财富 (一)"
-          echo "   Page4 ◆ 章鱼 AI+·东方财富 (二)"
+          echo " 顶栏示例: Page1~Page4 均显示「${TITLE:-章鱼 AI·全景分析}」"
           echo "=========================================="
 
           # 数组拼接参数，避免标题含空格/· 时被 shell 拆分
