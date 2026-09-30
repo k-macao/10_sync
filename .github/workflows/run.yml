@@ -1,49 +1,54 @@
-# 章鱼 AI+ 看板 — GitHub Actions 工作流
-# 路径备忘：可复制本文件内容到 .github/workflows/run.yml
+# 章鱼 AI·全景分析 看板（极趣墨水屏 4 页）— GitHub Actions 工作流
 #
-# 四页布局（主标题统一 + 来源标签区分，正文互不重复）：
-#   Page1 ◆ 章鱼 AI+·财新社 (一)     Page2 ◆ 章鱼 AI+·财新社 (二)
-#   Page3 ◆ 章鱼 AI+·东方财富 (一)   Page4 ◆ 章鱼 AI+·东方财富 (二)
+# 默认行为（schedule 定时触发，零人工干预）：
+#   ① 拉取「仓库 02 · 章鱼 AI · 打氧日报」的当日推送页 output/latest.html
+#      （raw.githubusercontent.com 优先，失败自动切 GitHub Contents API）
+#   ② 解析成 4 页：速查卡 / 今日预判 / AI 全篇速览（上）/ AI 全篇速览（下）
+#   ③ 新鲜度校验（默认 36 小时）+ 排版预算（放不下的如实披露条数）
+#   ④ 推送 4 页 400×300 1-bit 图到 Zectrix 墨水屏
+#   ⑤ 记下内容指纹；下一轮内容没变就跳过推送（墨水屏每推一次闪一次，别刷屏）
 #
-# 参数说明：
-#   --source       仅影响第1-2页；默认 caixin
-#   --pages        默认 1,2,3,4（财新两页 + 东方财富两页）
-#   --east-column  第3-4页东方财富栏目，默认 345
-#   --title        仅覆盖第1-2页来源标签；主标题固定为 BOARD_TITLE=章鱼 AI+
-#   第3-4页始终独立抓取东方财富，并剔除与1-2页重复的标题
-name: 章鱼 AI+ 看板
+# 失败即显红、整轮不推：仓库 02 拉不到 / 过期 / HTML 改版 / 推送失败，
+# 一律退出码 1 —— Actions 变红告警，墨水屏保留上一次的内容，不会被覆盖成空白或残缺内容。
+name: 章鱼 AI·全景分析 看板
 
 on:
   schedule:
-    - cron: '*/30 * * * *'  # 每30分钟 (UTC) = 北京时间每个整点与半点（如 8:00 / 8:30）
+    - cron: '*/30 * * * *'   # 每 30 分钟自检一次（北京时间每个整点与半点）
   workflow_dispatch:
     inputs:
-      hotlist_source:
-        description: '第1-2页热榜源（第3-4页固定东方财富）'
+      mode:
+        description: '看板模式：octopus=调用仓库02日报（默认）/ news=财新+东财 / both=都推'
         required: false
-        default: 'caixin'
+        default: 'octopus'
         type: choice
         options:
-          - caixin
-          - eastmoney
-          - zhihu
-          - bilibili
-          - github
-      eastmoney_column:
-        description: '东方财富栏目ID（第3-4页；345导读/344要闻/340股市）'
-        required: false
-        default: '345'
-        type: string
-      custom_title:
-        description: '覆盖第1-2页来源标签（主标题固定 章鱼 AI+；留空用默认来源名）'
-        required: false
-        default: ''
-        type: string
+          - octopus
+          - news
+          - both
       pages:
-        description: '推送页面（1,2,3,4=财新+东财四页；1,2=仅财新）'
+        description: '推送页面（1,2,3,4=四页；1,2=只推前两页）'
         required: false
         default: '1,2,3,4'
         type: string
+      custom_title:
+        description: '覆盖顶栏文案（四页统一；留空即「章鱼 AI·全景分析」）'
+        required: false
+        default: ''
+        type: string
+      max_age_hours:
+        description: '日报新鲜度上限（小时）；超过就整轮跳过并报错'
+        required: false
+        default: '36'
+        type: string
+      force:
+        description: '即使内容与上次一致也照推（默认跳过，避免反复刷屏）'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
       dry_run:
         description: '仅预览不推送'
         required: false
@@ -53,67 +58,86 @@ on:
           - 'false'
           - 'true'
 
+# 防重叠：上一次没跑完就排队，不并发推墨水屏
+concurrency:
+  group: octopus-board
+  cancel-in-progress: false
+
 jobs:
-  build:
+  push:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-    concurrency:
-      group: octopus-board
-      cancel-in-progress: false
+      contents: read
     steps:
       - name: 获取代码
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
+        uses: actions/checkout@v4
 
       - name: 安装 Python 环境
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
       - name: 安装依赖包
-        run: pip install requests pillow zhdate
+        run: pip install --disable-pip-version-check requests pillow
 
-      - name: 运行！生成并推送（章鱼 AI+ · 1-2财新 + 3-4东方财富）
+      - name: 离线回归测试（不联网，先确认解析/排版没退化）
+        run: python3 -m unittest discover -s tests -v
+
+      - name: 取回上次推送的内容指纹
+        uses: actions/cache/restore@v4
+        with:
+          path: .octopus
+          key: octopus-state-${{ github.run_id }}
+          restore-keys: |
+            octopus-state-
+
+      - name: 生成并推送（调用仓库 02 的打氧日报推送页 → 墨水屏 4 页）
         env:
           ZECTRIX_API_KEY: ${{ secrets.ZECTRIX_API_KEY }}
           ZECTRIX_MAC: ${{ secrets.ZECTRIX_MAC }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          AMAP_WEATHER_KEY: ${{ secrets.AMAP_WEATHER_KEY }}
+          OCTOPUS_STATE_FILE: ${{ github.workspace }}/.octopus/state.json
+          OCTOPUS_REPO: ${{ vars.OCTOPUS_REPO || 'k-macao/02' }}
+          OCTOPUS_PATH: ${{ vars.OCTOPUS_PATH || 'output/latest.html' }}
         run: |
-          SRC="${{ inputs.hotlist_source || 'caixin' }}"
+          MODE="${{ inputs.mode || 'octopus' }}"
           PAGES="${{ inputs.pages || '1,2,3,4' }}"
-          COL="${{ inputs.eastmoney_column || '345' }}"
           TITLE="${{ inputs.custom_title }}"
+          AGE="${{ inputs.max_age_hours || '36' }}"
+          FORCE="${{ inputs.force || 'false' }}"
           DRY="${{ inputs.dry_run || 'false' }}"
 
           echo "=========================================="
-          echo " 章鱼 AI+ 看板"
+          echo " 章鱼 AI·全景分析 看板"
           echo "=========================================="
-          echo " 主标题(固定): 章鱼 AI+"
-          echo " 第1-2页来源:  $SRC"
-          echo " 第3-4页来源:  eastmoney (栏目 $COL)"
-          echo " 推送页面:     $PAGES"
-          echo " 标签覆盖:     ${TITLE:-'(默认来源名)'}"
-          echo " dry_run:      $DRY"
-          echo " 顶栏示例:"
-          echo "   Page1 ◆ 章鱼 AI+·财新社 (一)"
-          echo "   Page2 ◆ 章鱼 AI+·财新社 (二)"
-          echo "   Page3 ◆ 章鱼 AI+·东方财富 (一)"
-          echo "   Page4 ◆ 章鱼 AI+·东方财富 (二)"
+          echo " 模式:     $MODE"
+          echo " 页面:     $PAGES"
+          echo " 顶栏:     ${TITLE:-章鱼 AI·全景分析}"
+          echo " 日报源:   $OCTOPUS_REPO / $OCTOPUS_PATH"
+          echo " 新鲜度:   ${AGE} 小时"
+          echo " 内容未变: $([ "$FORCE" = true ] && echo '强制重推' || echo '跳过')"
+          echo " dry_run:  $DRY"
           echo "=========================================="
 
-          # 数组拼接参数，避免标题含空格/· 时被 shell 拆分
-          ARGS=(--source "$SRC")
-          ARGS+=(--pages "$PAGES")
-          ARGS+=(--east-column "$COL")
+          # 数组拼参数，避免标题含空格/· 时被 shell 拆分
+          ARGS=(--mode "$MODE" --pages "$PAGES" --max-age-hours "$AGE")
           if [ -n "$TITLE" ]; then
             ARGS+=(--title "$TITLE")
           fi
-          if [ "$DRY" = "true" ]; then
+          if [ "$FORCE" = true ]; then
+            ARGS+=(--force)
+          fi
+          if [ "$DRY" = true ]; then
             ARGS+=(--dry-run)
           fi
 
-          echo "执行: python main.py ${ARGS[*]}"
-          python main.py "${ARGS[@]}"
+          echo "执行: python3 main.py ${ARGS[*]}"
+          # 退出码非 0 = 整轮失败：Actions 显红告警，墨水屏保留上一次内容
+          python3 main.py "${ARGS[@]}"
+
+      - name: 记下本次推送的内容指纹
+        if: success() && hashFiles('.octopus/state.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .octopus
+          key: octopus-state-${{ github.run_id }}
