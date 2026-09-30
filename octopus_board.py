@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-octopus_board —— 把「仓库 02 · 章鱼 AI · 打氧日报」的当日推送页，渲染成 4 页 400×300 墨水屏。
+octopus_board —— 把「仓库 02 · 章鱼 AI · 打氧日报」的当日推送页，渲染成 5 页 400×300 墨水屏。
 
-4 页分工（顶栏四页统一「章鱼 AI·全景分析」，正文互不重复）：
+5 页分工（顶栏五页统一「章鱼 AI·全景分析」，正文互不重复）：
     Page 1  【闪电飞鱼】短线速查卡      —— 30 秒读完：定调 / 明日剧本 / 七日风 / 今明必看 / 水位 / 数据底
     Page 2  【回游金枪鱼】今日预判      —— 方向与关键数字
     Page 3  【爪爪八爪鱼】AI 全篇速览（上）—— 市场与资金 / 量化与策略
     Page 4  【爪爪八爪鱼】AI 全篇速览（下）—— 政策与日程 / 资讯与情绪
+    Page 5  【探照安康鱼】时间节点          —— 今明 ★★★ 时间点逐条 + 30 天窗口摘要
 
 排版约定（400×300、1-bit，放不下是常态，所以绝不假装放得下）：
     · 放不下的条目按顺序截断并加「…」，整条挤掉的如实写「▼ 另有 N 项 · 全文见微信打氧日报」，
@@ -58,11 +59,18 @@ TRUNCATE_MARK = "…"
 # 每页底部固定的口径行
 FOOTER_NOTE = "数字与正文同源 · 非投资建议"
 
-# 两档密度：normal 适合条目少、每条要读清的 P1/P2；compact 适合条目多的 P3/P4
+# 三档密度（页面在报告里各自声明用哪档）：
+#   normal  —— 数字面 / 日历页：条目要读清，放不下就整条舍弃；
+#   tight   —— P1 结论面：字号小一号换行数，但同样「宁可整条舍弃、不把句子截半」；
+#   compact —— P3/P4 速览：每条本来就是一行摘要，允许多条上屏、单条最多 2 行。
 DENSITY = {
     "normal": {
         "label": font_label, "value": font_value, "head": font_head,
         "line": 17, "line_head": 19, "gap": 3, "cap": 0, "keep_going": False,
+    },
+    "tight": {
+        "label": font_label_s, "value": font_value_s, "head": font_head_s,
+        "line": 15, "line_head": 16, "gap": 3, "cap": 0, "keep_going": False,
     },
     "compact": {
         "label": font_label_s, "value": font_value_s, "head": font_head_s,
@@ -241,9 +249,9 @@ def layout_items(draw, items, page, body_bottom):
         is_group_head = item.kind == "group" and not item.value
 
         if is_group_head:
-            # 分节标题只在「后面还放得下一整条内容」时才画，
+            # 分节标题只在「后面还放得下下一条的开头两行」时才画，
             # 否则会出现一个光秃秃的标题悬在页脚上方
-            if y + line_h + 4 + line_h_head > body_bottom:
+            if y + line_h + 4 + line_h_head * 2 > body_bottom:
                 dropped += 1 + len(remaining)
                 break
             ops.append(("group", segs[0].text, y, style["label"]))
@@ -353,7 +361,7 @@ def _run_ops(draw, ops):
 # ---------------------------------------------------------------------
 # 整页渲染
 # ---------------------------------------------------------------------
-def render_page(page_id, page, report, total_pages=4, title=None):
+def render_page(page_id, page, report, total_pages=5, title=None):
     """把一页内容画成 400×300 的 1-bit 图。"""
     img = new_canvas()
     d = ImageDraw.Draw(img)
@@ -364,12 +372,12 @@ def render_page(page_id, page, report, total_pages=4, title=None):
     return img
 
 
-def push_octopus_board(report, pages, dry_run=False, title=None, total_pages=4):
+def push_octopus_board(report, pages, dry_run=False, title=None, total_pages=5):
     """
-    渲染并推送 4 页。返回 {页码: True 成功 / False 失败 / None 该页无内容未推}。
+    渲染并推送 5 页。返回 {页码: True 成功 / False 失败 / None 该页无内容未推}。
     """
     results = {}
-    for pid in [p for p in ("1", "2", "3", "4") if p in ENABLED_PAGES]:
+    for pid in [p for p in ("1", "2", "3", "4", "5") if p in ENABLED_PAGES]:
         page = pages.get(int(pid)) or pages.get(pid)
         if not page or not page.get("items"):
             print(f"⏩ Page {pid} 无内容，跳过（不覆盖墨水屏原有内容）")
@@ -461,7 +469,7 @@ def already_pushed(fingerprint, path=None, force=False):
 # ---------------------------------------------------------------------
 def run(html_path=None, dry_run=False, title=None, max_age_hours=None, require_fresh=True):
     """
-    完整跑一遍：拉取仓库 02 日报 → 解析 → 新鲜度校验 → 排 4 页。
+    完整跑一遍：拉取仓库 02 日报 → 解析 → 新鲜度校验 → 排 5 页。
 
     失败一律抛 R.ReportUnavailable（调用方 / Actions 据此让整轮显红并保留旧画面）。
     返回 (report, pages, fingerprint)
@@ -496,7 +504,7 @@ def run(html_path=None, dry_run=False, title=None, max_age_hours=None, require_f
 if __name__ == "__main__":
     import argparse
 
-    ap = argparse.ArgumentParser(description="把仓库 02 的打氧日报推到墨水屏 4 页")
+    ap = argparse.ArgumentParser(description="把仓库 02 的打氧日报推到墨水屏 5 页")
     ap.add_argument("--from-file", dest="html_path", default=None,
                     help="用本地日报 HTML 预览（离线自测，不联网）")
     ap.add_argument("--title", dest="title", default=None, help="覆盖顶栏文案")
@@ -527,4 +535,4 @@ if __name__ == "__main__":
     if failed:
         print(f"❌ 有页面推送失败：{failed}")
         sys.exit(1)
-    print("🎉 打氧日报 4 页推送完成")
+    print("🎉 打氧日报 5 页推送完成")

@@ -31,12 +31,12 @@ def board_title():
 # 两块看板（新闻看板 main.py / 打氧日报看板 octopus_board.py）共用同一份。
 
 # 1. 控制推送哪几页？
-# 墨水屏共 4 页，默认四页内容互不重复：
-#   - 1,2 = 第1组来源（默认财新社 HOTLIST_SOURCE）
-#   - 3,4 = 第2组来源（默认东方财富，始终独立抓取）
-#   顶栏标题：四页统一显示「章鱼 AI·全景分析」，仅正文内容不同
+# 墨水屏共 5 页（octopus 模式默认推满 5 页；news 模式只用 1-4 页）：
+#   - octopus：1 速查卡 / 2 今日预判 / 3-4 AI 全篇速览 / 5 时间节点
+#   - news：1,2 = 第1组来源（默认财新社 HOTLIST_SOURCE）；3,4 = 第2组来源（默认东方财富）
+#   顶栏标题：五页统一显示「章鱼 AI·全景分析」，仅正文内容不同
 #   若只要 2 页，设 board_core.py 里的 ENABLED_PAGES="1,2"
-#   完整 4 页：ENABLED_PAGES="1,2,3,4"（board_core.py 里的默认值）
+#   完整 5 页：ENABLED_PAGES="1,2,3,4,5"（board_core.py 里的默认值）
 
 # 2. 第 1,2 页热搜源设置：支持 'zhihu', 'bilibili', 'github', 'eastmoney', 'caixin'
 #   - zhihu: 知乎热榜
@@ -512,7 +512,7 @@ def dedupe_titles(titles, exclude=None):
 def render_two_pages(titles, page_ids, label, part_names=("一", "二"), dry_run=False):
     """
     把同一来源的 titles 连续分页画到 page_ids（通常是 [1,2] 或 [3,4]）。
-    - 顶栏：◆ 章鱼 AI+·{label} (一/二)  —— 主标题统一 + 来源标签区分四页
+    - 顶栏：◆ 章鱼 AI+·{label} (一/二)  —— 主标题统一 + 来源标签区分两页
     - 内容：第 N+1 页从上一页结束处接续，同来源两页条目不重叠
     返回本页组实际用到的标题列表（供跨组去重）。
     """
@@ -630,14 +630,15 @@ def task_eastmoney(dry_run=False, title_override=None, exclude_titles=None, hotl
 # ================= 主程序 =================
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="极趣墨水屏 章鱼 AI·全景分析 看板（4 页 400×300）",
+        description="极趣墨水屏 章鱼 AI·全景分析 看板（5 页 400×300）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""两种看板：
   --mode octopus（默认）  调用仓库 02「章鱼 AI · 打氧日报」的当日推送页，
-                        解析成 4 页摘要推到墨水屏。仓库 02 拉不到 / 过期 /
+                        解析成 5 页推到墨水屏：1 速查卡 / 2 今日预判 /
+                        3-4 AI 全篇速览 / 5 时间节点。仓库 02 拉不到 / 过期 /
                         解析不出内容时整轮跳过、保留墨水屏原有内容并以退出码 1 报错。
-  --mode news             原来的新闻看板：1-2 页财新社 + 3-4 页东方财富。
-  --mode both             先推打氧日报 4 页，再把新闻页覆盖成 page 5-8（需设备支持更多页）。""",
+  --mode news             原来的新闻看板：1-2 页财新社 + 3-4 页东方财富（不占第 5 页）。
+  --mode both             先推打氧日报 5 页，再把新闻页覆盖回 1-4 页（设备只认 5 页，慎用）。""",
     )
     parser.add_argument("--mode", dest="mode", type=str, default="octopus",
                         choices=["octopus", "news", "both"],
@@ -653,12 +654,12 @@ def parse_args():
     parser.add_argument("--source", dest="source", type=str, default=None,
                         help="news 模式：第1-2页热搜源: zhihu/bilibili/github/eastmoney/caixin (默认 caixin)")
     parser.add_argument("--pages", dest="pages", type=str, default=None,
-                        help="覆盖推送页面，例如 \"1,2\" 仅推两页，\"1,2,3,4\" 推四页")
+                        help="覆盖推送页面，例如 \"1,2\" 仅推两页，\"1,2,3,4,5\" 推五页")
     parser.add_argument("--dry-run", action="store_true", help="仅本地生成预览图，不推送到 Zectrix")
     parser.add_argument("--east-column", dest="east_column", type=str, default=None,
                         help="news 模式：东方财富栏目ID（第3-4页），默认345（财经导读）")
     parser.add_argument("--title", dest="title", type=str, default=None,
-                        help="覆盖顶栏文案（四页统一），默认「章鱼 AI·全景分析」")
+                        help="覆盖顶栏文案（五页统一），默认「章鱼 AI·全景分析」")
     return parser.parse_args()
 
 
@@ -678,7 +679,7 @@ def _resolve_dry_run(args):
 
 
 def run_octopus(args, dry_run_mode):
-    """调用仓库 02 的打氧日报推送页 → 墨水屏 4 页。失败即整轮失败。"""
+    """调用仓库 02 的打氧日报推送页 → 墨水屏 5 页。失败即整轮失败。"""
     import octopus_board
     import octopus_report
 
@@ -703,6 +704,13 @@ def run_octopus(args, dry_run_mode):
         report, pages, dry_run=dry_run_mode, title=args.title or board_title()
     )
     print(f"🔑 内容指纹：{fingerprint}")
+    # 版式有第 5 页（时间节点）之后，旧工作流里的 --pages 1,2,3,4 会让它永远上不了屏：
+    # 代码默认 1,2,3,4,5，但命令行/工作流传进来的列表说了算 —— 这里把话说明白，别让第 5 页悄悄空着。
+    on_pages = {p.strip() for p in enabled_pages().split(",") if p.strip()}
+    off = [pid for pid in sorted(pages) if str(pid) not in on_pages]
+    if off:
+        print(f"⚠️ 第 {'、'.join(str(p) for p in off)} 页有内容，但不在本次推送列表（{enabled_pages()}）里，这一轮不上屏。")
+        print("   要推满五页：--pages 1,2,3,4,5；定时任务请把工作流里 pages 的默认值 '1,2,3,4' 改成 '1,2,3,4,5'。")
     failed = [pid for pid, ok in results.items() if ok is False]
     if failed:
         print(f"❌ 有页面推送失败：{failed}")
@@ -749,7 +757,7 @@ if __name__ == "__main__":
         print(f"🔧 命令行覆盖推送页面: {enabled_pages()}")
     if args.title:
         set_board_title(args.title)
-        print(f"🔧 顶栏文案覆盖(四页统一): {board_title()}")
+        print(f"🔧 顶栏文案覆盖(五页统一): {board_title()}")
     if args.source:
         HOTLIST_SOURCE = args.source
         print(f"🔧 命令行覆盖第1-2页热搜源: {HOTLIST_SOURCE}")
@@ -765,8 +773,8 @@ if __name__ == "__main__":
         exit_code = run_octopus(args, dry_run_mode)
     if args.mode in ("news", "both"):
         if args.mode == "both":
-            # 两块看板共用 4 页，both 模式把新闻页放在后面，覆盖同一批物理页
-            print("ℹ️ both 模式：新闻看板会覆盖同一批物理页（1-4），请确认设备只有 4 页")
+            # 设备只认 5 页：both 模式 = 打氧日报占 1-5，新闻页随后覆盖回 1-4
+            print("ℹ️ both 模式：打氧日报推 1-5 页，新闻看板随后覆盖 1-4 页（第 5 页保留日历）")
         exit_code = run_news(args, dry_run_mode) or exit_code
 
     raise SystemExit(exit_code)

@@ -3,7 +3,7 @@
 打氧日报看板（octopus_board）的离线回归测试。
 
 全部不联网：解析用 tests/fixtures/latest_sample.html（从仓库 02 真实日报里
-裁出来的 3 个栏目），推送用 mock。跑法：
+裁出来的 4 个栏目：速查卡 / AI 全篇速览 / 今日预判 / 财经日历），推送用 mock。跑法：
 
     python3 -m unittest discover -s tests -v
     python3 -m unittest tests.test_octopus_board -v
@@ -36,8 +36,8 @@ class TestParse(unittest.TestCase):
         self.report = R.parse_report(load_fixture())
 
     def test_sections_found(self):
-        self.assertEqual(len(self.report.sections), 3)
-        for kicker in ("00 · SHORT CARD", "01 · AI DIGEST", "02 · FORECAST"):
+        self.assertEqual(len(self.report.sections), 4)
+        for kicker in ("00 · SHORT CARD", "01 · AI DIGEST", "02 · FORECAST", "03 · ECON CALENDAR"):
             self.assertIn(kicker, self.report.sections)
 
     def test_meta(self):
@@ -94,6 +94,79 @@ class TestParse(unittest.TestCase):
 
 
 # =====================================================================
+# 财经日历（第 5 页的数据源）
+# =====================================================================
+class TestCalendarExtraction(unittest.TestCase):
+    """表格里「日期只写第一行」的结构必须按行继承，否则时间点会串到别天。"""
+
+    def setUp(self):
+        self.report = R.parse_report(load_fixture())
+        self.cal = self.report.section("03 · ECON CALENDAR")
+        self.rows = R._calendar_rows(self.cal)
+
+    def test_section_keeps_its_node(self):
+        """条目已经被拍平成一行行文字，取回表格结构只能靠 Section.node。"""
+        self.assertIsNotNone(self.cal.node)
+        self.assertTrue(self.cal.node.find_all("table"))
+
+    def test_rows_parsed(self):
+        self.assertEqual(len(self.rows), 12)
+        first = self.rows[0]
+        self.assertEqual((first["date"], first["tag"], first["time"], first["country"]),
+                         ("09-30 周三", "今天", "09:30", "中国"))
+        self.assertEqual(first["name"], "非制造业PMI:商务活动")
+        self.assertEqual(first["month"], "9月")
+
+    def test_date_inherited_to_following_rows(self):
+        """20:15 / 20:30 那几行日期列是空的，必须继承「今天」而不是变成明天。"""
+        self.assertTrue(all(r["date"] == "09-30 周三" for r in self.rows[:5]), self.rows)
+        self.assertTrue(all(r["date"] == "10-01 周四" for r in self.rows[5:]), self.rows)
+
+    def test_decoration_and_flags_stripped(self):
+        """★★★ 与「· 数据」是每行都有的装饰，不该占墨水屏的宽度。"""
+        self.assertTrue(all("★" not in r["name"] for r in self.rows))
+        self.assertTrue(all(r["name"] != "数据" for r in self.rows))
+
+    def test_merge_names_only_rearranges_tokens(self):
+        ism = [r["name"] for r in self.rows if r["time"] == "22:00"]
+        self.assertEqual(len(ism), 7)
+        merged = R._merge_names(ism)
+        for part in ("ISM:PMI:供应商交付", "就业", "新订单", "制造业", "产出", "自有库存", "物价"):
+            self.assertIn(part, merged)
+        self.assertTrue(merged.endswith(":季调"), merged)
+
+    def test_merge_names_keeps_unrelated_names(self):
+        self.assertEqual(R._merge_names(["恒指", "上证"]), "恒指、上证")
+        self.assertEqual(R._merge_names(["单个"]), "单个")
+        self.assertEqual(R._merge_names([]), "")
+
+    def test_day_items_keep_months_apart(self):
+        """同一个 20:30 里 GDP 是 6月、PCE 是 8月 —— 不能写成同一个月份。"""
+        days = R._calendar_day_groups(self.rows)
+        today = [d for d in days if d.label.startswith("今天")][0]
+        self.assertIn("年化实际GDP:终值（6月）", today.value)
+        self.assertIn("核心PCE物价指数:同比/环比（8月）", today.value)
+        self.assertNotIn("年化实际GDP:终值（8月）", today.value)
+        # 同一时刻的多条事件月份一致时只写一次，省宽度
+        self.assertIn("非制造业PMI:商务活动（9月）", today.value)
+        self.assertNotIn("（9月）/", today.value)
+
+    def test_every_rendered_row_is_in_source_html(self):
+        """渲染出来的时间点必须逐条能在日报原文里找到，不许自己编。"""
+        html = load_fixture()
+        for r in self.rows:
+            self.assertIn(r["time"], html)
+            self.assertIn(r["name"], html)
+
+    def test_busiest_day_rescued_from_notes(self):
+        """「最密集日」在日报里算附注，日历页要把它捞回来（句尾口径去掉）。"""
+        item = R._busiest_day(self.cal)
+        self.assertIsNotNone(item)
+        self.assertTrue(item.value.startswith("10-14 周三"))
+        self.assertNotIn("规则合成", item.value)
+
+
+# =====================================================================
 # 排版计划
 # =====================================================================
 class TestBuildPages(unittest.TestCase):
@@ -101,8 +174,8 @@ class TestBuildPages(unittest.TestCase):
         self.report = R.parse_report(load_fixture())
         self.pages = R.build_pages(self.report)
 
-    def test_four_pages(self):
-        self.assertEqual(sorted(self.pages), [1, 2, 3, 4])
+    def test_five_pages(self):
+        self.assertEqual(sorted(self.pages), [1, 2, 3, 4, 5])
 
     def test_no_empty_page(self):
         for pid, page in self.pages.items():
@@ -113,14 +186,32 @@ class TestBuildPages(unittest.TestCase):
         self.assertIn("今日预判", self.pages[2]["section_title"])
         self.assertIn("AI 全篇速览", self.pages[3]["section_title"])
         self.assertIn("AI 全篇速览", self.pages[4]["section_title"])
-        self.assertEqual(self.pages[1]["density"], "normal")
+        self.assertIn("时间节点", self.pages[5]["section_title"])
+        self.assertEqual(self.pages[1]["density"], "tight")
+        self.assertEqual(self.pages[2]["density"], "normal")
         self.assertEqual(self.pages[3]["density"], "compact")
+        self.assertEqual(self.pages[5]["density"], "normal")
 
     def test_page1_priority(self):
-        """P1 是结论面：定调 / 明日剧本 / 七日风 / 今明必看 / 水位 必须在。"""
+        """P1 是结论面：定调 / 明日剧本 / 七日风 / 水位 必须在，新手小抄垫底。"""
         labels = [R.normalize_label(i.label) for i in self.pages[1]["items"]]
-        for want in ("今日定调", "明日剧本", "七日风", "今明必看", "水位"):
+        for want in ("今日定调", "明日剧本", "七日风", "水位"):
             self.assertIn(want, labels)
+        self.assertEqual(labels[-1], "新手小抄")
+
+    def test_when_summary_lives_on_page5(self):
+        """「今明必看」与日历页是同一件事：只在第 5 页的逐条时间点里出现，P1 不重复。"""
+        p1_labels = [R.normalize_label(i.label) for i in self.pages[1]["items"]]
+        self.assertNotIn("今明必看", p1_labels)
+
+    def test_page5_is_calendar(self):
+        """P5 = 今明两天的时间点 + 30 天窗口摘要（央行议息 / 最密集日）。"""
+        labels = [R.normalize_label(i.label) for i in self.pages[5]["items"]]
+        self.assertTrue(any(l.startswith("今天") for l in labels), labels)
+        self.assertTrue(any(l.startswith("明天") for l in labels), labels)
+        self.assertIn("30 天窗口摘要", labels)
+        self.assertIn("央行议息 / 重要会议", labels)
+        self.assertIn("最密集日", labels)
 
     def test_page2_priority(self):
         """P2 顺序即优先级：港股要在美股前面（美股滞后，价值低）。"""
@@ -130,12 +221,17 @@ class TestBuildPages(unittest.TestCase):
         self.assertLess(labels.index("港股"), labels.index("美股"))
 
     def test_pages_do_not_repeat(self):
-        """四页正文不能整段重复。"""
+        """五页正文不能整段重复。"""
         dumps = []
-        for pid in (1, 2, 3, 4):
+        for pid in (1, 2, 3, 4, 5):
             dumps.append("".join(i.label + i.value for i in self.pages[pid]["items"]))
-        self.assertEqual(len(set(dumps)), 4)
+        self.assertEqual(len(set(dumps)), 5)
         self.assertGreater(len(set(dumps[2]) & set(dumps[3])), 0)  # P3/P4 同栏目，内容不同
+
+    def test_calendar_not_repeated_in_digest(self):
+        """日历页占了「时间节点」，P4 的速览里就不再重复同一行。"""
+        p4 = "".join(i.label + i.value for i in self.pages[4]["items"])
+        self.assertNotIn(R.CALENDAR_DIGEST_DUP, p4)
 
     def test_degraded_section_still_builds(self):
         """少了 AI DIGEST / FORECAST 时也要能排（不推空屏）。"""
@@ -149,8 +245,23 @@ class TestBuildPages(unittest.TestCase):
         self.assertIn("00 · SHORT CARD", report.sections)
         self.assertNotIn("01 · AI DIGEST", report.sections)
         pages = R.build_pages(report)
-        for pid in (1, 2, 3, 4):
+        for pid in (1, 2, 3, 4, 5):
             self.assertTrue(pages[pid]["items"], f"Page {pid} 退化后空了")
+
+    def test_page5_falls_back_without_calendar(self):
+        """日报没给日历栏目时，第 5 页要从别的栏目取内容，并且 P4 保留时间节点摘要。"""
+        import re
+        trimmed = re.sub(
+            r"<!--SPLIT--><div[^>]*>(?:(?!<!--SPLIT-->).)*?<h2[^>]*>【探照安康鱼】时间节点</h2>.*?(?=</html>)",
+            "", load_fixture(), flags=re.S,
+        )
+        report = R.parse_report(trimmed)
+        self.assertNotIn("03 · ECON CALENDAR", report.sections)
+        pages = R.build_pages(report)
+        for pid in (1, 2, 3, 4, 5):
+            self.assertTrue(pages[pid]["items"], f"没有日历栏目时 Page {pid} 空了")
+        p4 = "".join(i.label + i.value for i in pages[4]["items"])
+        self.assertIn(R.CALENDAR_DIGEST_DUP, p4)
 
     def test_almost_empty_raises(self):
         """内容太空要在解析阶段就报错，绝不能推一个空屏出去。"""
@@ -160,7 +271,7 @@ class TestBuildPages(unittest.TestCase):
             R.parse_report(trimmed)
 
     def test_single_section_report_raises_on_empty_pages(self):
-        """只剩一个栏目时，build_pages 至少要保证 4 页都有东西（或明确报错）。"""
+        """只剩速查卡 + 日历时，build_pages 至少要保证 5 页都有东西（或明确报错）。"""
         import re
         trimmed = re.sub(
             r"<!--SPLIT--><div[^>]*>(?:(?!<!--SPLIT-->).)*?"
@@ -168,7 +279,7 @@ class TestBuildPages(unittest.TestCase):
             "", load_fixture(), flags=re.S,
         )
         pages = R.build_pages(R.parse_report(trimmed))
-        for pid in (1, 2, 3, 4):
+        for pid in (1, 2, 3, 4, 5):
             self.assertTrue(pages[pid]["items"], f"Page {pid} 空了")
         # 退化时补的内容必须来自真实日报，不能凭空造
         card = R.parse_report(trimmed).section("00 · SHORT CARD")
@@ -238,7 +349,13 @@ class TestRender(unittest.TestCase):
 
     def test_pages_differ(self):
         pixels = {pid: B.render_page(pid, p, self.report).tobytes() for pid, p in self.pages.items()}
-        self.assertEqual(len(set(pixels.values())), 4)
+        self.assertEqual(len(set(pixels.values())), 5)
+
+    def test_page_counter_shows_five(self):
+        """顶栏右上角页码必须跟着 5 页走。"""
+        img = B.render_page(5, self.pages[5], self.report)
+        self.assertEqual(B.render_page(1, self.pages[1], self.report).size, (400, 300))
+        self.assertEqual(img.size, (400, 300))
 
     def test_nothing_drawn_below_body(self):
         """正文不能画到页脚口径行的下面（会盖住 / 溢出）。"""
@@ -414,6 +531,14 @@ class TestWorkflow(unittest.TestCase):
         self.assertEqual(parsed.title, "测试")
         self.assertTrue(parsed.force)
         self.assertTrue(parsed.dry_run)
+
+    def test_board_default_is_five_pages(self):
+        """看板自身默认推满 5 页；工作流显式传 --pages 覆盖时，main.py 会明确告警缺了哪页。"""
+        import board_core
+        self.assertEqual(
+            sorted(p.strip() for p in board_core.ENABLED_PAGES.split(",") if p.strip()),
+            ["1", "2", "3", "4", "5"],
+        )
 
     def test_active_workflow_has_secrets_and_schedule(self):
         self.assertIn("ZECTRIX_API_KEY", self.active)
