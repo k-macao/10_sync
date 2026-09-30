@@ -381,19 +381,8 @@ class TestNormalizeLabel(unittest.TestCase):
 # =====================================================================
 # 工作流自检
 # =====================================================================
-LEGACY_FLAGS = ("--source", "--pages", "--east-column", "--title")
-
-
 class TestWorkflow(unittest.TestCase):
-    """
-    工作流与 main.py 的衔接自检。
-
-    现状：`.github/workflows/run.yml` 还是旧版新闻看板工作流（本次会话的令牌没有
-    `workflows` 权限，改不了它），升级版放在根目录 `w.yml` 里。
-    好在旧工作流本来就是调 `python main.py`——新版 main.py 的 --mode 默认 octopus，
-    所以合并后**不用改工作流**就会自动切成推打氧日报。
-    这里把这件事盯住，别以后悄悄跑偏。
-    """
+    """工作流与 main.py 的衔接自检。"""
 
     def setUp(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -408,18 +397,23 @@ class TestWorkflow(unittest.TestCase):
             self.assertIn(key, self.memo, f"w.yml 少了 {key}")
 
     def test_active_workflow_calls_main_py(self):
-        self.assertIn("python main.py", self.active)
+        self.assertRegex(self.active, r"(?m)^\s*python3 main\.py\s+\"\$\{ARGS\[@\]\}\"")
 
     def test_active_workflow_flags_are_tolerated_by_octopus_mode(self):
-        """旧工作流传的这些参数，octopus 模式必须能原样接住（否则合并后直接报错）。"""
-        for flag in LEGACY_FLAGS:
-            self.assertIn(flag, self.active, f"旧工作流没传 {flag}，测试需要更新")
+        """活动工作流传给 main.py 的参数必须受支持，且默认路径使用 octopus 模式。"""
+        for flag in ("--mode", "--pages", "--max-age-hours", "--title", "--force", "--dry-run"):
+            self.assertIn(flag, self.active, f"活动工作流缺少 {flag}")
         import main
-        argv = ["main.py"] + [f for flag in LEGACY_FLAGS for f in (flag, "x")]
-        parsed = _parse_args(main, argv)
-        self.assertEqual(parsed.mode, "octopus", "octopus 必须是默认模式，旧工作流才会自动切过来")
-        self.assertEqual(parsed.pages, "x")
-        self.assertFalse(parsed.dry_run)
+        parsed = _parse_args(main, [
+            "main.py", "--mode", "octopus", "--pages", "1,2", "--max-age-hours", "36",
+            "--title", "测试", "--force", "--dry-run",
+        ])
+        self.assertEqual(parsed.mode, "octopus")
+        self.assertEqual(parsed.pages, "1,2")
+        self.assertEqual(parsed.max_age_hours, 36)
+        self.assertEqual(parsed.title, "测试")
+        self.assertTrue(parsed.force)
+        self.assertTrue(parsed.dry_run)
 
     def test_active_workflow_has_secrets_and_schedule(self):
         self.assertIn("ZECTRIX_API_KEY", self.active)
