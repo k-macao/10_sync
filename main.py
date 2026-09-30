@@ -1,37 +1,44 @@
-import os
 import requests
 import re
 import json
 import time
 import random
 import argparse
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 from datetime import datetime, timedelta
+
+import board_core
+from board_core import (
+    API_KEY, MAC_ADDRESS,
+    font_item, font_small, font_title,
+    make_page_header, push_image, set_board_title, set_enabled_pages, wrap_text_by_pixels,
+)
+
+
+def enabled_pages():
+    """当前启用的页（读 board_core 的实时值，--pages 覆盖后立刻生效）。"""
+    return board_core.ENABLED_PAGES
+
+
+def board_title():
+    """当前顶栏文案（--title 覆盖后立刻生效）。"""
+    return board_core.BOARD_TITLE
 
 # =====================================================================
 # 🌟 第一部分：用户自定义区（想改什么，直接在这里改文字和数字） 🌟
 # =====================================================================
+# 顶栏文案、启用页、字体、Zectrix 推送通道都放在 board_core.py，
+# 两块看板（新闻看板 main.py / 打氧日报看板 octopus_board.py）共用同一份。
 
-# 1. 看板顶栏文案（四页统一，只显示这一行字）
-BOARD_TITLE = "章鱼 AI·全景分析"
-
-# 1.1 顶栏是否额外拼接来源标签 / 分页序号
-#   默认全部 False → 顶栏只显示 BOARD_TITLE（即「章鱼 AI·全景分析」）
-#   如果想恢复成 “章鱼 AI·全景分析·财新社 (一)” 这类写法，把对应项改成 True
-HEADER_SHOW_SOURCE = False   # True → 顶栏追加 ·财新社 / ·东方财富
-HEADER_SHOW_PART = False     # True → 顶栏追加 (一) / (二)
-HEADER_PREFIX = ""           # 想要小菱形前缀就填 "◆ "
-
-# 2. 控制推送哪几页？
+# 1. 控制推送哪几页？
 # 墨水屏共 4 页，默认四页内容互不重复：
 #   - 1,2 = 第1组来源（默认财新社 HOTLIST_SOURCE）
 #   - 3,4 = 第2组来源（默认东方财富，始终独立抓取）
 #   顶栏标题：四页统一显示「章鱼 AI·全景分析」，仅正文内容不同
-#   若只要 2 页，设 ENABLED_PAGES="1,2"
-#   完整 4 页：ENABLED_PAGES="1,2,3,4"
-ENABLED_PAGES = "1,2,3,4"
+#   若只要 2 页，设 board_core.py 里的 ENABLED_PAGES="1,2"
+#   完整 4 页：ENABLED_PAGES="1,2,3,4"（board_core.py 里的默认值）
 
-# 3. 第 1,2 页热搜源设置：支持 'zhihu', 'bilibili', 'github', 'eastmoney', 'caixin'
+# 2. 第 1,2 页热搜源设置：支持 'zhihu', 'bilibili', 'github', 'eastmoney', 'caixin'
 #   - zhihu: 知乎热榜
 #   - bilibili: B站热搜
 #   - github: GitHub热门仓库
@@ -39,17 +46,17 @@ ENABLED_PAGES = "1,2,3,4"
 #   - caixin: 财新社（财新网最新）
 HOTLIST_SOURCE = "caixin"  # 第 1,2 页默认财新社
 
-# 3.1 东方财富细分配置（用于第 3,4 页；若 1,2 也选 eastmoney 则自动换栏目/翻页避免重复）
+# 2.1 东方财富细分配置（用于第 3,4 页；若 1,2 也选 eastmoney 则自动换栏目/翻页避免重复）
 EASTMONEY_COLUMN = "345"
 EASTMONEY_BIZ = "web_news_col"
 EASTMONEY_PAGE_SIZE = 24
 # 当第1,2页也是 eastmoney 时，第3,4页改用此栏目，保证内容不同
 EASTMONEY_ALT_COLUMN = "344"
 
-# 3.2 财新社配置（用于第 1,2 页）
+# 2.2 财新社配置（用于第 1,2 页）
 CAIXIN_PAGE_SIZE = 24
 
-# 3.3 各来源在顶栏显示的短标签（必须互不相同，保证四页一眼可辨）
+# 2.3 各来源在顶栏显示的短标签（必须互不相同，保证四页一眼可辨）
 SOURCE_LABELS = {
     "caixin": "财新社",
     "eastmoney": "东方财富",
@@ -57,33 +64,6 @@ SOURCE_LABELS = {
     "bilibili": "B站热搜",
     "github": "GitHub",
 }
-
-# =====================================================================
-# 🔒 第二部分：核心密钥区（⚠️绝对不要改这里，请在 GitHub Secrets 里配置） 🔒
-# =====================================================================
-API_KEY = os.environ.get("ZECTRIX_API_KEY")
-MAC_ADDRESS = os.environ.get("ZECTRIX_MAC")
-# AMAP_KEY 已废弃（天气页已去除），保留兼容读取但不再使用
-AMAP_KEY = os.environ.get("AMAP_WEATHER_KEY")
-
-PUSH_URL = f"https://cloud.zectrix.com/open/v1/devices/{MAC_ADDRESS}/display/image" if MAC_ADDRESS else ""
-
-# =====================================================================
-# ⚙️ 第三部分：底层运行逻辑
-# =====================================================================
-
-FONT_PATH = "font.ttf"
-try:
-    font_huge = ImageFont.truetype(FONT_PATH, 65)
-    font_title = ImageFont.truetype(FONT_PATH, 24)
-    font_item = ImageFont.truetype(FONT_PATH, 18)
-    font_small = ImageFont.truetype(FONT_PATH, 14)
-    font_tiny = ImageFont.truetype(FONT_PATH, 11)
-    font_48 = ImageFont.truetype(FONT_PATH, 48)
-    font_36 = ImageFont.truetype(FONT_PATH, 36)
-except:
-    print("❌ 错误: 找不到 font.ttf")
-    exit(1)
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -95,31 +75,6 @@ HEADERS_CAIXIN = {
     'Accept': 'application/json, text/plain, */*',
 }
 
-def push_image(img, page_id, dry_run=False):
-    if str(page_id) not in ENABLED_PAGES:
-        print(f"⏩ Page {page_id} 未启用，跳过推送。")
-        return True
-    filename = f"page_{page_id}.png"
-    img.save(filename)
-    print(f"💾 Page {page_id} 已保存为 {filename}")
-    if dry_run:
-        print(f"🔍 dry_run 模式：Page {page_id} 仅本地预览，不推送到 Zectrix")
-        return True
-    if not API_KEY or not MAC_ADDRESS:
-        print(f"⚠️ 未配置 ZECTRIX_API_KEY / ZECTRIX_MAC，Page {page_id} 仅本地保存，跳过推送。")
-        return False
-    api_headers = {"X-API-Key": API_KEY}
-    push_url = f"https://cloud.zectrix.com/open/v1/devices/{MAC_ADDRESS}/display/image"
-    try:
-        with open(filename, "rb") as f:
-            files = {"images": (filename, f, "image/png")}
-            data = {"dither": "true", "pageId": str(page_id)}
-            res = requests.post(push_url, headers=api_headers, files=files, data=data, timeout=15)
-            print(f"✅ Page {page_id} 推送成功: {res.status_code} - {res.text[:200]}")
-            return res.status_code in (200, 201, 204)
-    except Exception as e:
-        print(f"❌ Page {page_id} 推送失败: {e}")
-        return False
 
 # --- 财新社专用获取 ---
 def get_caixin_news(page_size=20):
@@ -137,7 +92,7 @@ def get_caixin_news(page_size=20):
         f"https://mapiv5.caixin.com/m/api/getWapIndexListByPage?page=1&count={page_size}&callback=&_={timestamp}",
         f"https://gateway.caixin.com/api/extapi/homeInterface.jsp?subject=100990318;100990314;100990311&start=0&count={page_size}&type=2&_={timestamp}",
         f"https://gateway.caixin.com/api/dataplatform/scroll/index?count={page_size}",
-        f"https://mapiv5.caixin.com/m/api/getWapIndexListByPage?page=1",
+        "https://mapiv5.caixin.com/m/api/getWapIndexListByPage?page=1",
     ]
 
     for url in api_candidates:
@@ -500,25 +455,6 @@ def source_label(source, override=None):
     return SOURCE_LABELS.get(source, source or "资讯")
 
 
-def wrap_text_by_pixels(draw, text, font, max_width):
-    lines = []
-    current_line = ""
-    for char in text:
-        test_line = current_line + char
-        try:
-            w = draw.textlength(test_line, font=font)
-        except AttributeError:
-            w = draw.textbbox((0, 0), test_line, font=font)[2]
-        if w <= max_width:
-            current_line = test_line
-        else:
-            lines.append(current_line)
-            current_line = char
-    if current_line:
-        lines.append(current_line)
-    return lines
-
-
 def draw_news_list(draw, page_title, items, start_idx):
     """
     在 400x300 画布上绘制新闻列表。
@@ -573,22 +509,6 @@ def dedupe_titles(titles, exclude=None):
     return out
 
 
-def make_page_header(label, part):
-    """
-    顶栏文案：默认四页统一，只显示 BOARD_TITLE（「章鱼 AI·全景分析」）。
-    如需恢复来源标签 / 分页序号，把顶部的 HEADER_SHOW_SOURCE / HEADER_SHOW_PART 改为 True。
-    过长时 draw_news_list 会按像素截断。
-    """
-    main = (BOARD_TITLE or "").strip() or "章鱼 AI·全景分析"
-    text = f"{HEADER_PREFIX}{main}"
-    label = (label or "").strip()
-    if HEADER_SHOW_SOURCE and label and label != main:
-        text = f"{text}·{label}"
-    if HEADER_SHOW_PART and part:
-        text = f"{text} ({part})"
-    return text
-
-
 def render_two_pages(titles, page_ids, label, part_names=("一", "二"), dry_run=False):
     """
     把同一来源的 titles 连续分页画到 page_ids（通常是 [1,2] 或 [3,4]）。
@@ -600,7 +520,8 @@ def render_two_pages(titles, page_ids, label, part_names=("一", "二"), dry_run
     if not page_ids:
         return used
     next_s = 0
-    enabled = [str(p) for p in page_ids if str(p) in ENABLED_PAGES]
+    pages_on = enabled_pages()
+    enabled = [str(p) for p in page_ids if str(p) in pages_on]
     if not enabled:
         return used
 
@@ -627,7 +548,8 @@ def render_two_pages(titles, page_ids, label, part_names=("一", "二"), dry_run
 # --- 任务：热搜看板（1,2页，默认财新社） ---
 def task_hotlist(dry_run=False, source_override=None, title_override=None):
     effective_source = source_override or HOTLIST_SOURCE
-    if "1" not in ENABLED_PAGES and "2" not in ENABLED_PAGES:
+    pages_on = enabled_pages()
+    if "1" not in pages_on and "2" not in pages_on:
         return []
 
     label = source_label(effective_source, override=title_override)
@@ -653,7 +575,8 @@ def task_eastmoney(dry_run=False, title_override=None, exclude_titles=None, hotl
     - 独立抓取，顶栏固定显示「东方财富」，与第1-2页来源标签不同
     - 若第1-2页也是 eastmoney：自动换栏目（ALT）并翻到第2页 API，再剔除 exclude，保证四页内容都不重复
     """
-    if "3" not in ENABLED_PAGES and "4" not in ENABLED_PAGES:
+    pages_on = enabled_pages()
+    if "3" not in pages_on and "4" not in pages_on:
         return []
 
     hotlist_source = hotlist_source or HOTLIST_SOURCE
@@ -706,71 +629,144 @@ def task_eastmoney(dry_run=False, title_override=None, exclude_titles=None, hotl
 
 # ================= 主程序 =================
 def parse_args():
-    parser = argparse.ArgumentParser(description="极趣墨水屏 章鱼 AI+ 看板 - 1,2财新 + 3,4东方财富（四页内容互不重复）")
+    parser = argparse.ArgumentParser(
+        description="极趣墨水屏 章鱼 AI·全景分析 看板（4 页 400×300）",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""两种看板：
+  --mode octopus（默认）  调用仓库 02「章鱼 AI · 打氧日报」的当日推送页，
+                        解析成 4 页摘要推到墨水屏。仓库 02 拉不到 / 过期 /
+                        解析不出内容时整轮跳过、保留墨水屏原有内容并以退出码 1 报错。
+  --mode news             原来的新闻看板：1-2 页财新社 + 3-4 页东方财富。
+  --mode both             先推打氧日报 4 页，再把新闻页覆盖成 page 5-8（需设备支持更多页）。""",
+    )
+    parser.add_argument("--mode", dest="mode", type=str, default="octopus",
+                        choices=["octopus", "news", "both"],
+                        help="看板模式：octopus=调用仓库02日报（默认）/ news=财新+东财 / both=两个都推")
+    parser.add_argument("--from-file", dest="from_file", type=str, default=None,
+                        help="octopus 模式：用本地日报 HTML 渲染（离线自测，不联网）")
+    parser.add_argument("--max-age-hours", dest="max_age_hours", type=float, default=None,
+                        help="octopus 模式：日报新鲜度上限（小时），默认 36")
+    parser.add_argument("--allow-stale", action="store_true",
+                        help="octopus 模式：超过新鲜度上限也照推（默认整轮跳过并报错）")
+    parser.add_argument("--force", action="store_true",
+                        help="octopus 模式：即使内容与上次推送一致也照推（默认跳过，避免反复刷屏）")
     parser.add_argument("--source", dest="source", type=str, default=None,
-                        help="第1-2页热搜源: zhihu/bilibili/github/eastmoney/caixin (默认 caixin)")
+                        help="news 模式：第1-2页热搜源: zhihu/bilibili/github/eastmoney/caixin (默认 caixin)")
     parser.add_argument("--pages", dest="pages", type=str, default=None,
-                        help="覆盖推送页面，例如 \"1,2\" 仅推财新两页，\"1,2,3,4\" 推财新+东方财富四页")
+                        help="覆盖推送页面，例如 \"1,2\" 仅推两页，\"1,2,3,4\" 推四页")
     parser.add_argument("--dry-run", action="store_true", help="仅本地生成预览图，不推送到 Zectrix")
     parser.add_argument("--east-column", dest="east_column", type=str, default=None,
-                        help="东方财富栏目ID（第3-4页），默认345（财经导读）")
+                        help="news 模式：东方财富栏目ID（第3-4页），默认345（财经导读）")
     parser.add_argument("--title", dest="title", type=str, default=None,
                         help="覆盖顶栏文案（四页统一），默认「章鱼 AI·全景分析」")
     return parser.parse_args()
 
-if __name__ == "__main__":
-    args = parse_args()
 
-    if args.source:
-        HOTLIST_SOURCE = args.source
-        print(f"🔧 命令行覆盖第1-2页热搜源: {HOTLIST_SOURCE}")
-    if args.pages:
-        ENABLED_PAGES = args.pages
-        print(f"🔧 命令行覆盖推送页面: {ENABLED_PAGES}")
-    if args.east_column:
-        EASTMONEY_COLUMN = args.east_column
-        print(f"🔧 东方财富栏目覆盖(第3-4页): {EASTMONEY_COLUMN}")
-    if args.title:
-        BOARD_TITLE = args.title
-        print(f"🔧 顶栏文案覆盖(四页统一): {BOARD_TITLE}")
-
-    dry_run_mode = args.dry_run
+def _resolve_dry_run(args):
+    """没配密钥就别真推：自动降级成 dry_run，并说清楚原因。"""
+    if args.dry_run:
+        print("🔍 dry_run 模式：仅生成本地预览图")
+        return True
     if not API_KEY or not MAC_ADDRESS:
-        if not dry_run_mode:
-            print("⚠️ 未检测到 ZECTRIX_API_KEY / ZECTRIX_MAC，自动切换为 dry_run 本地预览模式")
-            print("   如需真正推送到墨水屏，请先设置：")
-            print("   export ZECTRIX_API_KEY=你的Key")
-            print("   export ZECTRIX_MAC=AA:BB:CC:DD:EE:FF")
-            print("   python main.py --pages 1,2,3,4 --dry-run")
-            dry_run_mode = True
-        else:
-            print("🔍 dry_run 模式：仅生成本地预览图")
-    else:
-        if dry_run_mode:
-            print("🔍 dry_run 模式：已配置密钥但仍仅本地预览")
-        else:
-            print(f"🚀 已配置 Zectrix 设备 {MAC_ADDRESS}，将执行真实推送")
+        print("⚠️ 未检测到 ZECTRIX_API_KEY / ZECTRIX_MAC，自动切换为 dry_run 本地预览模式")
+        print("   如需真正推送到墨水屏，请先设置：")
+        print("   export ZECTRIX_API_KEY=你的Key")
+        print("   export ZECTRIX_MAC=AA:BB:CC:DD:EE:FF")
+        return True
+    print(f"🚀 已配置 Zectrix 设备 {MAC_ADDRESS}，将执行真实推送")
+    return False
 
-    print(f"🚀 开始执行墨水屏推送任务（顶栏: {BOARD_TITLE}）...")
-    print(f"   第1-2页源: {HOTLIST_SOURCE} | 页面: {ENABLED_PAGES} | 模式: {'dry_run' if dry_run_mode else 'push'}")
-    print(f"   分页策略: 四页顶栏统一「{BOARD_TITLE}」；1-2 与 3-4 不同来源；同来源接续；跨组去重")
 
-    # 1,2 页（默认财新社）
+def run_octopus(args, dry_run_mode):
+    """调用仓库 02 的打氧日报推送页 → 墨水屏 4 页。失败即整轮失败。"""
+    import octopus_board
+    import octopus_report
+
+    try:
+        report, pages, fingerprint = octopus_board.run(
+            html_path=args.from_file,
+            dry_run=dry_run_mode,
+            title=args.title or board_title(),
+            max_age_hours=args.max_age_hours,
+            require_fresh=not args.allow_stale,
+        )
+    except octopus_report.ReportUnavailable as exc:
+        print(f"❌ {exc}")
+        print("   → 本轮不推送，墨水屏保留上一次的内容（不覆盖成空白或残缺内容）")
+        return 1
+
+    # 内容没变就别反复刷屏（墨水屏每推一次就闪一次）
+    if octopus_board.already_pushed(fingerprint, force=args.force):
+        return 0
+
+    results = octopus_board.push_octopus_board(
+        report, pages, dry_run=dry_run_mode, title=args.title or board_title()
+    )
+    print(f"🔑 内容指纹：{fingerprint}")
+    failed = [pid for pid, ok in results.items() if ok is False]
+    if failed:
+        print(f"❌ 有页面推送失败：{failed}")
+        return 1
+
+    octopus_board.write_state(fingerprint, extra={
+        "report_date": report.date,
+        "generated_at": report.generated_at,
+        "pages": {str(pid): page.get("section_title", "") for pid, page in pages.items()},
+    })
+    pushed = [pid for pid, ok in results.items() if ok is True]
+    print(f"🎉 打氧日报推送完成（{len(pushed)} 页：{'、'.join(pushed)}）")
+    if dry_run_mode:
+        print("💡 预览图已生成：page_*.png")
+    return 0
+
+
+def run_news(args, dry_run_mode):
+    """原来的新闻看板：1-2 页第 1 组来源 + 3-4 页东方财富。"""
+    print(f"🚀 新闻看板（顶栏: {board_title()}）...")
+    print(f"   第1-2页源: {HOTLIST_SOURCE} | 页面: {enabled_pages()} | 模式: {'dry_run' if dry_run_mode else 'push'}")
+    print(f"   分页策略: 四页顶栏统一「{board_title()}」；1-2 与 3-4 不同来源；同来源接续；跨组去重")
+
     used_12 = task_hotlist(
         dry_run=dry_run_mode,
         source_override=HOTLIST_SOURCE,
         title_override=None,
     )
-    # 3,4 页（东方财富），剔除 1,2 已用标题，保证四页内容都不同
     task_eastmoney(
         dry_run=dry_run_mode,
         title_override=None,
         exclude_titles=used_12,
         hotlist_source=HOTLIST_SOURCE,
     )
+    print("🎉 新闻看板推送完成")
+    return 0
 
-    print("🎉 所有任务执行完毕！")
-    if dry_run_mode:
-        print("💡 预览图已生成：page_*.png")
-        print(f"   Page1~Page4 顶栏统一：{BOARD_TITLE}")
-        print("   四页顶栏文案一致，仅正文内容互不相同（1-2财新 / 3-4东方财富）")
+
+if __name__ == "__main__":
+    args = parse_args()
+
+    if args.pages:
+        set_enabled_pages(args.pages)
+        print(f"🔧 命令行覆盖推送页面: {enabled_pages()}")
+    if args.title:
+        set_board_title(args.title)
+        print(f"🔧 顶栏文案覆盖(四页统一): {board_title()}")
+    if args.source:
+        HOTLIST_SOURCE = args.source
+        print(f"🔧 命令行覆盖第1-2页热搜源: {HOTLIST_SOURCE}")
+    if args.east_column:
+        EASTMONEY_COLUMN = args.east_column
+        print(f"🔧 东方财富栏目覆盖(第3-4页): {EASTMONEY_COLUMN}")
+
+    dry_run_mode = _resolve_dry_run(args)
+    print(f"🖥 模式: {args.mode} | 页面: {enabled_pages()} | {'dry_run' if dry_run_mode else 'push'}")
+
+    exit_code = 0
+    if args.mode in ("octopus", "both"):
+        exit_code = run_octopus(args, dry_run_mode)
+    if args.mode in ("news", "both"):
+        if args.mode == "both":
+            # 两块看板共用 4 页，both 模式把新闻页放在后面，覆盖同一批物理页
+            print("ℹ️ both 模式：新闻看板会覆盖同一批物理页（1-4），请确认设备只有 4 页")
+        exit_code = run_news(args, dry_run_mode) or exit_code
+
+    raise SystemExit(exit_code)
