@@ -8,7 +8,7 @@ board_core —— 墨水屏看板的公共底层（两块看板共用）
     CANVAS / FONT_*            画布尺寸与各号字体
     push_image()               推一张 1-bit PNG 到 Zectrix 指定页
     wrap_text_by_pixels()      按像素宽度折行
-    make_page_header()         顶栏文案（四页统一）
+    make_page_header()         顶栏文案（五页统一）
     set_enabled_pages() / set_board_title()   供 main.py 的命令行覆盖调用
 """
 
@@ -28,13 +28,13 @@ AMAP_KEY = os.environ.get("AMAP_WEATHER_KEY")
 # 🌟 顶栏 / 页面配置
 # =====================================================================
 BOARD_TITLE = "章鱼 AI·全景分析"
-# 顶栏是否额外拼接来源标签 / 分页序号（默认全关 = 四页统一只显示 BOARD_TITLE）
+# 顶栏是否额外拼接来源标签 / 分页序号（默认全关 = 五页统一只显示 BOARD_TITLE）
 HEADER_SHOW_SOURCE = False
 HEADER_SHOW_PART = False
 HEADER_PREFIX = ""
 
-# 控制推送哪几页（墨水屏共 4 页）
-ENABLED_PAGES = "1,2,3,4"
+# 控制推送哪几页（墨水屏共 5 页）
+ENABLED_PAGES = "1,2,3,4,5"
 
 # =====================================================================
 # 🎨 画布与字体
@@ -58,7 +58,7 @@ try:
     font_value = ImageFont.truetype(FONT_PATH, 14)
     font_head = ImageFont.truetype(FONT_PATH, 16)
     font_foot = ImageFont.truetype(FONT_PATH, 10)
-    # 紧凑档：第 3/4 页（AI 全篇速览）条目多、每条已经是「一行摘要」，用小一号字换条数
+    # 紧凑档：第 1/3/4 页（结论面、AI 全篇速览）条目多、每条已经是「一行摘要」，用小一号字换行数
     font_label_s = ImageFont.truetype(FONT_PATH, 13)
     font_value_s = ImageFont.truetype(FONT_PATH, 12)
     font_head_s = ImageFont.truetype(FONT_PATH, 13)
@@ -150,7 +150,7 @@ def wrap_text_by_pixels(draw, text, font, max_width):
 
 def make_page_header(label, part):
     """
-    顶栏文案：默认四页统一，只显示 BOARD_TITLE（「章鱼 AI·全景分析」）。
+    顶栏文案：默认五页统一，只显示 BOARD_TITLE（「章鱼 AI·全景分析」）。
     如需恢复来源标签 / 分页序号，把 HEADER_SHOW_SOURCE / HEADER_SHOW_PART 改成 True。
     过长时调用方会按像素截断。
     """
