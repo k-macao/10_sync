@@ -1,11 +1,11 @@
-# 章鱼 AI·全景分析 看板（极趣墨水屏 4 页）— GitHub Actions 工作流
+# 章鱼 AI·全景分析 看板（极趣墨水屏 5 页）— GitHub Actions 工作流
 #
 # 默认行为（schedule 定时触发，零人工干预）：
 #   ① 拉取「仓库 02 · 章鱼 AI · 打氧日报」的当日推送页 output/latest.html
 #      （raw.githubusercontent.com 优先，失败自动切 GitHub Contents API）
-#   ② 解析成 4 页：速查卡 / 今日预判 / AI 全篇速览（上）/ AI 全篇速览（下）
+#   ② 解析成 5 页：速查卡 / 今日预判 / AI 全篇速览（上）/ AI 全篇速览（下）/ 时间节点
 #   ③ 新鲜度校验（默认 36 小时）+ 排版预算（放不下的如实披露条数）
-#   ④ 推送 4 页 400×300 1-bit 图到 Zectrix 墨水屏
+#   ④ 推送 5 页 400×300 1-bit 图到 Zectrix 墨水屏
 #   ⑤ 记下内容指纹；下一轮内容没变就跳过推送（墨水屏每推一次闪一次，别刷屏）
 #
 # 失败即显红、整轮不推：仓库 02 拉不到 / 过期 / HTML 改版 / 推送失败，
@@ -27,12 +27,12 @@ on:
           - news
           - both
       pages:
-        description: '推送页面（1,2,3,4=四页；1,2=只推前两页）'
+        description: '推送页面（1,2,3,4,5=五页；1,2=只推前两页）'
         required: false
-        default: '1,2,3,4'
+        default: '1,2,3,4,5'
         type: string
       custom_title:
-        description: '覆盖顶栏文案（四页统一；留空即「章鱼 AI·全景分析」）'
+        description: '覆盖顶栏文案（五页统一；留空即「章鱼 AI·全景分析」）'
         required: false
         default: ''
         type: string
@@ -91,7 +91,7 @@ jobs:
           restore-keys: |
             octopus-state-
 
-      - name: 生成并推送（调用仓库 02 的打氧日报推送页 → 墨水屏 4 页）
+      - name: 生成并推送（调用仓库 02 的打氧日报推送页 → 墨水屏 5 页）
         env:
           ZECTRIX_API_KEY: ${{ secrets.ZECTRIX_API_KEY }}
           ZECTRIX_MAC: ${{ secrets.ZECTRIX_MAC }}
@@ -101,7 +101,7 @@ jobs:
           OCTOPUS_PATH: ${{ vars.OCTOPUS_PATH || 'output/latest.html' }}
         run: |
           MODE="${{ inputs.mode || 'octopus' }}"
-          PAGES="${{ inputs.pages || '1,2,3,4' }}"
+          PAGES="${{ inputs.pages || '1,2,3,4,5' }}"
           TITLE="${{ inputs.custom_title }}"
           AGE="${{ inputs.max_age_hours || '36' }}"
           FORCE="${{ inputs.force || 'false' }}"
