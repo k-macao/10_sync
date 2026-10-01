@@ -34,7 +34,7 @@ BEIJING_TZ = timezone(timedelta(hours=8))
 DEFAULT_REPO = os.environ.get("OCTOPUS_REPO", "k-macao/02")
 DEFAULT_REF = os.environ.get("OCTOPUS_REF", "main")
 DEFAULT_PATH = os.environ.get("OCTOPUS_PATH", "output/latest.html")
-# 日报更新是「每天一次」级别，30 分钟一次的推送里内容基本不会变。
+# 日报更新是「每天一次」级别，2 小时一次的推送里内容基本不会变。
 # 超过这个小时数还没更新 → 判定 02 侧已停更，整轮跳过（不推残缺/过期内容）。
 MAX_AGE_HOURS = float(os.environ.get("OCTOPUS_MAX_AGE_HOURS", "36"))
 HTTP_TIMEOUT = int(os.environ.get("OCTOPUS_HTTP_TIMEOUT", "25"))

@@ -10,6 +10,7 @@
 """
 
 import os
+import re
 import sys
 import unittest
 from datetime import datetime, timedelta
@@ -546,13 +547,46 @@ class TestWorkflow(unittest.TestCase):
         self.assertIn("concurrency:", self.active)
         self.assertIn("cron:", self.active)
 
-    def test_synced_workflows_must_match(self):
-        """一旦有人把 w.yml 复制到 run.yml，之后两边就必须逐字一致。"""
-        if "OCTOPUS_STATE_FILE" in self.active:      # 已经同步过了
-            self.assertEqual(
-                self.memo.strip(), self.active.strip(),
-                "w.yml 与 .github/workflows/run.yml 内容不一致，请同步后提交",
+    def test_schedule_is_every_two_hours(self):
+        """跟随仓库 02 的更新节奏：模板 w.yml 锁死每 2 小时一次。"""
+        self.assertIn("cron: '0 */2 * * *'", self.memo, "w.yml 的 cron 不是每 2 小时")
+        self.assertNotIn("*/30 * * * *", self.memo, "w.yml 还留着 30 分钟一次的旧 cron")
+
+    def test_active_workflow_schedule(self):
+        """活动工作流要有 cron；还没同步成 2 小时时不下红，但要把待办喊出来。
+
+        `.github/workflows/` 下的文件需要令牌具备 `workflows` 权限才能改，
+        Agent 令牌没有这个权限时，只能由人在 GitHub 网页端补上这一行（见 README「Actions 全自动推」）。
+        """
+        crons = re.findall(r"(?m)^\s*- cron: '([^']+)'", self.active)
+        self.assertTrue(crons, "活动工作流缺少 cron")
+        if "0 */2 * * *" not in crons:
+            print(
+                "⚠️ .github/workflows/run.yml 的 cron 还是 "
+                f"{crons[0]}，尚未同步成每 2 小时一次"
+                "（Agent 令牌缺 workflows 权限，请在 GitHub 网页端把 cron 改成 "
+                "'0 */2 * * *'，或整份复制 w.yml 覆盖）"
             )
+
+    def test_synced_workflows_must_match(self):
+        """一旦有人把 w.yml 复制到 run.yml，之后两边就必须逐字一致（cron 行除外）。
+
+        `cron` 之所以单独放行：`.github/workflows/` 需要 `workflows` 权限才能改，
+        改频率时可以先改 w.yml，再由人在网页端同步那一行（校验见
+        `test_schedule_is_every_two_hours` 与 `test_active_workflow_schedule`）。
+        除 cron 外的任何差异（例如 pages 默认值）照样当成不同步处理。
+        """
+        if "OCTOPUS_STATE_FILE" not in self.active:      # 还没同步过，跳过
+            return
+
+        def without_cron(text):
+            # 整行归一（含行尾注释）：'0 */2 * * *' 与 '*/30 * * * *' 视作同一处「待同步」
+            return re.sub(r"(?m)^(\s*)- cron:.*$", r"\1- cron: <CRON>", text).strip()
+
+        self.assertEqual(
+            without_cron(self.memo), without_cron(self.active),
+            "w.yml 与 .github/workflows/run.yml 除 cron 行外不一致，请同步后提交",
+        )
 
     def test_no_hardcoded_secrets(self):
         for bad in ("ZECTRIX_API_KEY: k-macao", "token: ghp_", "key-1234"):
