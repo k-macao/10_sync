@@ -14,7 +14,7 @@ name: 章鱼 AI·全景分析 看板
 
 on:
   schedule:
-    - cron: '*/30 * * * *'   # 每 30 分钟自检一次（北京时间每个整点与半点）
+    - cron: '0 */2 * * *'    # 每 2 小时自检一次（UTC 偶数整点；北京时间同样落在偶数整点）
   workflow_dispatch:
     inputs:
       mode:
