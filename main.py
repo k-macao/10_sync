@@ -710,7 +710,7 @@ def run_octopus(args, dry_run_mode):
     off = [pid for pid in sorted(pages) if str(pid) not in on_pages]
     if off:
         print(f"⚠️ 第 {'、'.join(str(p) for p in off)} 页有内容，但不在本次推送列表（{enabled_pages()}）里，这一轮不上屏。")
-        print("   要推满五页：--pages 1,2,3,4,5；定时任务请把工作流里 pages 的默认值 '1,2,3,4' 改成 '1,2,3,4,5'。")
+        print("   要推满五页：--pages 1,2,3,4,5（工作流里的 pages 默认值已经是这个，定时任务不会漏页）。")
     failed = [pid for pid, ok in results.items() if ok is False]
     if failed:
         print(f"❌ 有页面推送失败：{failed}")
