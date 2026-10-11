@@ -21,11 +21,18 @@ import octopus_board as B          # noqa: E402
 import octopus_report as R         # noqa: E402
 
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "latest_sample.html")
+# 2026-10 改版后的日报（表头嵌进 <table>、栏目重排成 00~17、日志图表压成一行一格）
+FIXTURE_LIME = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "latest_sample_lime.html")
 BEIJING = R.BEIJING_TZ
 
 
 def load_fixture():
     with open(FIXTURE, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def load_fixture_lime():
+    with open(FIXTURE_LIME, encoding="utf-8") as fh:
         return fh.read()
 
 
@@ -170,6 +177,120 @@ class TestCalendarExtraction(unittest.TestCase):
 # =====================================================================
 # 排版计划
 # =====================================================================
+# =====================================================================
+# 2026-10 改版版式（lime）：表头嵌进表格 / 栏目重排 / 日历一行一格
+# =====================================================================
+class TestLimeLayout(unittest.TestCase):
+    """改版后的日报（真样本 tests/fixtures/latest_sample_lime.html）必须照样解析出 5 页。"""
+
+    def setUp(self):
+        self.html = load_fixture_lime()
+        self.report = R.parse_report(self.html)
+        self.pages = R.build_pages(self.report)
+
+    def test_sections_found(self):
+        """18 个栏目一个不少；栏目名按 `SECTION nn · NAME` 还原成「编号 · 名称」。"""
+        self.assertEqual(len(self.report.sections), 18)
+        for kicker in ("17 · SHORT CARD", "16 · FORECAST", "10 · ECON CALENDAR", "14 · NEWS SENTIMENT"):
+            self.assertIn(kicker, self.report.sections, f"新版日报少了栏目 {kicker}")
+
+    def test_h2_nested_in_table_is_found(self):
+        """改版后 <h2> 嵌在 <table><tr><td> 里，解析器必须往子树里找。"""
+        card = self.report.sections["17 · SHORT CARD"]
+        self.assertIn("闪电飞鱼", card.title)
+        self.assertEqual(card.kicker, "17 · SHORT CARD")
+
+    def test_section_by_name_beats_substring(self):
+        """按名取「FORECAST」要拿到【回游金枪鱼】今日预判，不能命中「02 · QUANT FORECAST」。"""
+        forecast = R._section_by_name(self.report, "FORECAST", "02", "16")
+        self.assertIn("回游金枪鱼", forecast.title)
+        quant = R._section_by_name(self.report, "QUANT FORECAST")
+        self.assertIn("量化预测总览", quant.title)
+
+    def test_items_not_duplicated(self):
+        """「表里套表」的行只能收一次 —— 曾经把子表的行连同外壳行一起抄，条目全翻倍。"""
+        forecast = self.report.sections["16 · FORECAST"]
+        labels = [it.label for it in forecast.items if it.label]
+        self.assertEqual(len(labels), len(set(labels)), "同一行被收了两次")
+
+    def test_calendar_rows_new_layout(self):
+        """新版日历一行一格：日期只在每天第一行，后续行继承；时间/事件写在行内。"""
+        calendar = self.report.sections["10 · ECON CALENDAR"]
+        rows = R._calendar_rows(calendar)
+        self.assertGreaterEqual(len(rows), 5)
+        self.assertTrue(all(r["date"] for r in rows), "有行没继承到日期")
+        self.assertTrue(all(re.match(r"^\d{1,2}:\d{2}$", r["time"]) for r in rows), "时间没解析对")
+        self.assertIn("进出口金额", " ".join(r["name"] for r in rows))
+        groups = R._calendar_day_groups(rows)
+        self.assertTrue(groups and groups[0].value)
+
+    def test_busiest_day_from_items(self):
+        """新版「最密集日」是正常条目（不再落在附注里），也要捞得回来。"""
+        calendar = self.report.sections["10 · ECON CALENDAR"]
+        busiest = R._busiest_day(calendar)
+        self.assertIsNotNone(busiest)
+        self.assertIn("10-14", busiest.value)
+
+    def test_five_pages_filled_from_new_layout(self):
+        """5 页全部有内容，且第 1/2/5 页来自各自的新版栏目。"""
+        for pid in (1, 2, 3, 4, 5):
+            self.assertTrue(self.pages[pid]["items"], f"Page {pid} 空了")
+        self.assertIn("闪电飞鱼", self.pages[1]["section_title"])
+        self.assertIn("回游金枪鱼", self.pages[2]["section_title"])
+        self.assertIn("探照安康鱼", self.pages[5]["section_title"])
+        p1 = "".join(i.label + i.value for i in self.pages[1]["items"])
+        self.assertIn("明日剧本", p1)
+        p5 = "".join(i.label + i.value for i in self.pages[5]["items"])
+        self.assertIn("30 天窗口摘要", p5)
+
+    def test_digest_pages_follow_new_plan(self):
+        """第 3/4 页按 DIGEST_PLAN 从新栏目取摘要（老的 AI 全篇速览栏目已不存在）。"""
+        self.assertIsNone(self.report.section("01 · AI DIGEST"))
+        p3 = "".join(i.label + i.value for i in self.pages[3]["items"])
+        p4 = "".join(i.label + i.value for i in self.pages[4]["items"])
+        self.assertIn("量化与策略", p3)
+        self.assertIn("预测概括", p3)
+        self.assertIn("市场与资金", p3)
+        self.assertIn("政策与日程", p4)
+        self.assertIn("方向定调", p4)
+        self.assertIn("资讯与情绪", p4)
+
+    def test_digest_skips_stream_rows(self):
+        """逐标的 / 逐条新闻的流水行（label 是 ◆ / 数字编号）不该被搬上小屏。"""
+        for pid in (3, 4):
+            for item in self.pages[pid]["items"]:
+                self.assertNotIn(item.label, ("◆", "—", "⌁"))
+                self.assertFalse(re.match(r"^\d{1,2}$", item.label or ""), item.label)
+
+    def test_rendered_content_exists_in_source(self):
+        """
+        渲染出来的每一条都必须能在日报原文里找到 —— 不编、不自己算一套。
+
+        「新手小抄」是把日报的 ①②③ 三句话按原样拼成一行（`_newbie_line`），
+        所以核对前先把 ①/②/③ 这些小标号剥掉，剩下的话照样得逐字来自原文。
+        """
+        # 去掉标签与空白，只留正文（「上证 3,813.79 ▲ +0.05%」这种跨标签的句子才对得上）
+        flat = re.sub(r"\s+", "", re.sub(r"<[^>]*>", "", self.html))
+        for pid, page in self.pages.items():
+            if pid == 5:      # 第 5 页按行核对（见下），整句是合并出来的
+                continue
+            for item in page["items"]:
+                value = re.sub(r"[①②③]\s*\S{1,5}\s*", "", item.value)
+                for part in re.split(r"[；·]| ｜ ", value):
+                    part = re.sub(r"\s+", "", part)
+                    if len(part) >= 10:
+                        self.assertIn(part[:16], flat, f"Page {pid} 出现了日报里没有的内容：{part[:30]}")
+        # 第 5 页是把表格行合并成整句（时刻 + 国家 + 名称 + 月份），所以要按行核对
+        # 「时间 / 名称逐字来自原文」，跟老版式的 `test_every_rendered_row_is_in_source_html` 一个口径。
+        for row in R._calendar_rows(self.report.sections["10 · ECON CALENDAR"]):
+            self.assertIn(row["time"], self.html)
+            self.assertIn(row["name"], self.html)
+
+    def test_fingerprint_stable(self):
+        again = R.report_fingerprint(self.report, R.build_pages(self.report))
+        self.assertEqual(again, R.report_fingerprint(self.report, self.pages))
+
+
 class TestBuildPages(unittest.TestCase):
     def setUp(self):
         self.report = R.parse_report(load_fixture())
@@ -547,25 +668,27 @@ class TestWorkflow(unittest.TestCase):
         self.assertIn("concurrency:", self.active)
         self.assertIn("cron:", self.active)
 
-    def test_schedule_is_every_two_hours(self):
-        """跟随仓库 02 的更新节奏：模板 w.yml 锁死每 2 小时一次。"""
-        self.assertIn("cron: '0 */2 * * *'", self.memo, "w.yml 的 cron 不是每 2 小时")
+    def test_schedule_is_twice_daily(self):
+        """跟随仓库 02 的更新节奏（每天两次，北京时间约 14:45 / 22:00）：
+        模板 w.yml 锁死每天两次 —— UTC 00:00 / 12:00 = 北京时间 08:00 / 20:00。"""
+        self.assertIn("cron: '0 0,12 * * *'", self.memo, "w.yml 的 cron 不是每天两次")
         self.assertNotIn("*/30 * * * *", self.memo, "w.yml 还留着 30 分钟一次的旧 cron")
+        self.assertNotIn("0 */2 * * *", self.memo, "w.yml 还留着每 2 小时一次的旧 cron")
 
     def test_active_workflow_schedule(self):
-        """活动工作流要有 cron；还没同步成 2 小时时不下红，但要把待办喊出来。
+        """活动工作流要有 cron；还没同步成每天两次时不下红，但要把待办喊出来。
 
         `.github/workflows/` 下的文件需要令牌具备 `workflows` 权限才能改，
-        Agent 令牌没有这个权限时，只能由人在 GitHub 网页端补上这一行（见 README「Actions 全自动推」）。
+        令牌没有这个权限时，只能由人在 GitHub 网页端补上这一行（见 README「Actions 全自动推」）。
         """
         crons = re.findall(r"(?m)^\s*- cron: '([^']+)'", self.active)
         self.assertTrue(crons, "活动工作流缺少 cron")
-        if "0 */2 * * *" not in crons:
+        if "0 0,12 * * *" not in crons:
             print(
                 "⚠️ .github/workflows/run.yml 的 cron 还是 "
-                f"{crons[0]}，尚未同步成每 2 小时一次"
-                "（Agent 令牌缺 workflows 权限，请在 GitHub 网页端把 cron 改成 "
-                "'0 */2 * * *'，或整份复制 w.yml 覆盖）"
+                f"{crons[0]}，尚未同步成每天两次（0 0,12 * * * = 北京时间 08:00 / 20:00）"
+                "（令牌缺 workflows 权限时，请在 GitHub 网页端把 cron 改成 "
+                "'0 0,12 * * *'，或整份复制 w.yml 覆盖）"
             )
 
     def test_synced_workflows_must_match(self):
@@ -573,14 +696,14 @@ class TestWorkflow(unittest.TestCase):
 
         `cron` 之所以单独放行：`.github/workflows/` 需要 `workflows` 权限才能改，
         改频率时可以先改 w.yml，再由人在网页端同步那一行（校验见
-        `test_schedule_is_every_two_hours` 与 `test_active_workflow_schedule`）。
+        `test_schedule_is_twice_daily` 与 `test_active_workflow_schedule`）。
         除 cron 外的任何差异（例如 pages 默认值）照样当成不同步处理。
         """
         if "OCTOPUS_STATE_FILE" not in self.active:      # 还没同步过，跳过
             return
 
         def without_cron(text):
-            # 整行归一（含行尾注释）：'0 */2 * * *' 与 '*/30 * * * *' 视作同一处「待同步」
+            # 整行归一（含行尾注释）：'0 0,12 * * *' 与 '0 */2 * * *' 视作同一处「待同步」
             return re.sub(r"(?m)^(\s*)- cron:.*$", r"\1- cron: <CRON>", text).strip()
 
         self.assertEqual(

@@ -1,6 +1,7 @@
 # 章鱼 AI·全景分析 看板（极趣墨水屏 5 页）— GitHub Actions 工作流
 #
 # 默认行为（schedule 定时触发，零人工干预）：
+#   定时：每天两次（UTC 00:00 / 12:00 = 北京时间 08:00 / 20:00），对齐仓库 02 的更新节奏
 #   ① 拉取「仓库 02 · 章鱼 AI · 打氧日报」的当日推送页 output/latest.html
 #      （raw.githubusercontent.com 优先，失败自动切 GitHub Contents API）
 #   ② 解析成 5 页：速查卡 / 今日预判 / AI 全篇速览（上）/ AI 全篇速览（下）/ 时间节点
@@ -14,7 +15,7 @@ name: 章鱼 AI·全景分析 看板
 
 on:
   schedule:
-    - cron: '0 */2 * * *'    # 每 2 小时自检一次（UTC 偶数整点；北京时间同样落在偶数整点）
+    - cron: '0 0,12 * * *'   # 每天两次：UTC 00:00 / 12:00 = 北京时间 08:00 / 20:00
   workflow_dispatch:
     inputs:
       mode:

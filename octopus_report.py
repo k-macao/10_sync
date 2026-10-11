@@ -34,7 +34,7 @@ BEIJING_TZ = timezone(timedelta(hours=8))
 DEFAULT_REPO = os.environ.get("OCTOPUS_REPO", "k-macao/02")
 DEFAULT_REF = os.environ.get("OCTOPUS_REF", "main")
 DEFAULT_PATH = os.environ.get("OCTOPUS_PATH", "output/latest.html")
-# 日报更新是「每天一次」级别，2 小时一次的推送里内容基本不会变。
+# 日报更新是「每天两次」（北京时间约 14:45 / 22:00），推送也是每天两次。
 # 超过这个小时数还没更新 → 判定 02 侧已停更，整轮跳过（不推残缺/过期内容）。
 MAX_AGE_HOURS = float(os.environ.get("OCTOPUS_MAX_AGE_HOURS", "36"))
 HTTP_TIMEOUT = int(os.environ.get("OCTOPUS_HTTP_TIMEOUT", "25"))
@@ -384,16 +384,69 @@ def _labelish(text):
     return True
 
 
+def _nearest_table(node):
+    """往上找最近的祖先 <table>（没有就返回 None）——用来判断一行/一张表归谁。"""
+    owner = node.parent
+    while owner is not None and owner.tag not in ("table", "#root"):
+        owner = owner.parent
+    return owner if owner is not None and owner.tag == "table" else None
+
+
+def _own_rows(table):
+    """
+    只取这张表**自己的**行。
+
+    日报改版后正文是「表里套表」：外层行只起分组作用，真正的内容在子表的行里。
+    `table.find_all("tr")` 会把子表的行一并收走、外层行又把整棵子树重抄一遍，
+    所以这里按「最近的 table 祖先是自己」挑行，子表交给递归处理。
+    """
+    return [tr for tr in table.find_all("tr") if _nearest_table(tr) is table]
+
+
+def _own_sub_tables(table):
+    """这张表直接嵌着的子表（更深一层由子表自己再递归，避免同一张表被处理两次）。"""
+    return [sub for sub in table.find_all("table") if _nearest_table(sub) is table]
+
+
+def _cell_text(cell):
+    return " ".join(cell.text.split())
+
+
 def _table_items(node):
+    """
+    表格 → 条目（兼容日报两种版式）：
+
+      · 两列且第一列是短标签（「■ 明日剧本」）→ 标签 / 内容一条；
+      · 一行里嵌着子表（分组壳）→ 本行的 div 当小标题，内容交给子表递归，
+        绝不把整棵子树重抄成一条巨长的「内容」；
+      · 其余行 → 整行合成一条（kind='head'），交给 _headline_of / 排版决定去留。
+    """
     items = []
-    for tr in node.find_all("tr"):
-        cells = []
-        for cell in tr.element_children():
-            txt = " ".join(cell.text.split())
-            if txt:
-                cells.append(txt)
-        if cells:
-            items.append(Item("", " · ".join(cells), kind="head"))
+    for tr in _own_rows(node):
+        cells = [c for c in tr.element_children() if c.tag in ("td", "th")]
+        texts = [t for t in (_cell_text(c) for c in cells) if t]
+        sub_tables = [t for c in cells for t in c.find_all("table") if _nearest_table(t) is node]
+        if sub_tables:
+            # 外壳行只起分组作用：本行自己的 div 当小标题，正文交给子表逐层递归
+            for cell in cells:
+                for div in cell.find_all("div"):
+                    if div.element_children() or _nearest_table(div) is not node:
+                        continue
+                    txt = " ".join(div.text.split())
+                    if txt:
+                        items.append(Item("", txt, kind="head"))
+            for sub in sub_tables:
+                items.extend(_table_items(sub))
+            continue
+        if len(texts) == 2 and len(texts[0]) <= 16 and _labelish(texts[0]):
+            items.append(Item(texts[0], texts[1]))
+            continue
+        if len(texts) == 1:
+            cell = [c for c in cells if _cell_text(c)][0]
+            items.extend(parse_block_items(cell))
+            continue
+        if texts:
+            items.append(Item("", " · ".join(texts), kind="head"))
     return items
 
 
@@ -451,6 +504,60 @@ def _find_section_containers(root):
     return containers
 
 
+def _header_region(container):
+    """栏目头 = 容器里 `<!--BODY-->` 之前的节点（标题、栏目名、副题都在这一带）。"""
+    out = []
+    for child in container.children:
+        if isinstance(child, Node) and child.tag == "#comment" and child.attrs.get("data", "").strip() == "BODY":
+            break
+        out.append(child)
+    return out
+
+
+def _header_h2(container):
+    """
+    <h2> 是栏目标题。老版版式里它是容器的直接子节点；改版后嵌进了
+    `<table><tr><td>` 里 —— 所以按文档顺序在栏目头这一带**子树**里找，两种都能认。
+    """
+    for child in _header_region(container):
+        if not isinstance(child, Node):
+            continue
+        if child.tag == "h2":
+            return child
+        found = child.find_all("h2")
+        if found:
+            return found[0]
+    return None
+
+
+# 新版栏目头里的栏目名长这样：`SECTION 17 · SHORT CARD`（数字圆牌 + 栏目名）
+_SECTION_LABEL = re.compile(r"SECTION\s*(\d+)\s*·\s*([A-Za-z0-9][A-Za-z0-9 ·\-]*)")
+
+
+def _header_kicker(container, h2):
+    """
+    栏目名（旧版如 `00 · SHORT CARD`）。
+
+    新版把栏目名写在头部表格里，`SECTION 17 · SHORT CARD` → 还原成 `17 · SHORT CARD`，
+    这样 `report.section("17 · SHORT CARD")` 这种按名取栏的写法还能用；
+    老版仍走「h2 后面那个 div」。取不到就返回空串（调用方按空名归档，不会报错）。
+    """
+    head_text = " ".join(
+        " ".join(node.text.split())
+        for node in _header_region(container)
+        if isinstance(node, Node)
+    )
+    m = _SECTION_LABEL.search(head_text)
+    if m:
+        return f"{m.group(1)} · {m.group(2).strip()}"
+    for child in _header_region(container):
+        if isinstance(child, Node) and child is not h2 and child.tag == "div":
+            txt = " ".join(child.text.split())
+            if txt and not txt.startswith("http"):
+                return txt
+    return ""
+
+
 def parse_report(html_text):
     """把日报 HTML 解析成 Report。解析不出内容 → 抛 ReportUnavailable。"""
     if not html_text or "<h2" not in html_text:
@@ -475,25 +582,10 @@ def parse_report(html_text):
 
     sections = {}
     for child in containers:
-        h2 = None
-        body_seen = False
-        for c in child.children:
-            if isinstance(c, Node) and c.tag == "#comment" and c.attrs.get("data", "").strip() == "BODY":
-                body_seen = True
-                continue
-            if not body_seen:
-                if isinstance(c, Node) and c.tag == "h2" and h2 is None:
-                    h2 = c
-                continue
+        h2 = _header_h2(child)
         if h2 is None:
             continue
-        kicker = ""
-        for c in child.children:
-            if isinstance(c, Node) and c is not h2 and c.tag == "div":
-                txt = " ".join(c.text.split())
-                if txt and not txt.startswith("http"):
-                    kicker = txt
-                    break
+        kicker = _header_kicker(child, h2)
         section_title = " ".join(h2.text.split())
 
         # 正文 = <!--BODY--> 之后的顶层子节点
@@ -613,6 +705,36 @@ DIGEST_GROUPS = {
     3: ("市场与资金", "量化与策略"),
     4: ("政策与日程", "资讯与情绪"),
 }
+# 日报 2026-10 改版后没有了「01 · AI DIGEST【爪爪八爪鱼】AI 全篇速览」这一栏
+# （栏目重排成 00~17），速览两页改成直接从各专题栏目取「摘要行」——
+# 组名沿用原来的四类，方便和旧版式对照；每栏最多取几条写在括号里（小屏放不下就整条舍弃）。
+DIGEST_PLAN = {
+    3: (
+        ("量化与策略", (
+            ("QUANT FORECAST", 2, ("预测概括", "数据时效")),
+            ("HK PROBABILITY", 3, ("恒指 趋势状态", "宽度综合分", "分项")),
+        )),
+        ("市场与资金", (
+            ("LIQUIDITY FLOW", 2, ("流动性概括", "南向解读")),
+            ("RETAIL SENTIMENT", 2, ("综合净情绪 NBI", "方向样本")),
+        )),
+    ),
+    4: (
+        ("政策与日程", (
+            ("POLICY SHOCK", 2, ("大盘冲击", "量化趋势分", "趋势预判信号")),
+            ("FED TREND", 2, ("方向定调", "词表计数")),
+            ("GEO TREND", 2, ("方向定调", "词表计数")),
+        )),
+        ("资讯与情绪", (
+            ("NEWS SENTIMENT", 3, ("整体 DNS", "A股", "港股", "美股")),
+            ("MARKET REVIEW", 2, ("涨跌比 / 情绪定调", "沪深京成交额合计")),
+            ("SUMMARY", 2, ("今日盘点", "明日关注", "预测追踪")),
+        )),
+    ),
+}
+# 速览页只搬「摘要行」：逐标的 / 逐条新闻的流水行（label 是符号或编号）不上小屏
+DIGEST_SKIP_LABELS = ("◆", "—", "⌁")
+DIGEST_SKIP_LABEL_RE = re.compile(r"^\d{1,2}$")
 # 财经日历（第 5 页的数据源）
 CALENDAR_KICKER = "03 · ECON CALENDAR"
 # P4 的「政策与日程」里有一行【探照安康鱼】时间节点摘要，日历页会把它全文展开；
@@ -672,14 +794,16 @@ def _headline_of(section, default_label="核心判断", split_label=None):
     """
     if section is None:
         return None
-    for it in section.items:
-        if not it.label and it.value:
-            value = it.value
-            if split_label:
-                m = re.match(rf"^[^\w]*{re.escape(split_label)}\s*(.+)$", value, re.S)
-                if m:
-                    return Item(split_label, m.group(1).strip(), kind="head")
-            return Item(default_label, value, kind="head")
+    # 「结论 · 重点」这类小标题也是无标签条目，但它不是结论；先按长度挑真正的整句。
+    heads = [it for it in section.items if not it.label and it.value]
+    heads.sort(key=lambda it: len(it.value) < 12)      # 长句优先，短标题垫底（稳定排序，不改变原有先后）
+    for it in heads:
+        value = it.value
+        if split_label:
+            m = re.match(rf"^[^\w]*{re.escape(split_label)}\s*(.+)$", value, re.S)
+            if m:
+                return Item(split_label, m.group(1).strip(), kind="head")
+        return Item(default_label, value, kind="head")
     return None
 
 
@@ -697,12 +821,22 @@ def _clean_cell(text):
     return " ".join((text or "").split())
 
 
+# 新版日历（改版后）把每天压成一格：`10-14 周三` + `T+3` + `时间 00:00` + `影响经济的时间点 ★★★ 中国 · 名称 · 9月 · 数据`
+_CAL_ROW_DATE = re.compile(r"^(\d{2}-\d{2})\s*(周[一二三四五六日])?\s*(今天|明天|昨天|T\+\d+)?")
+_CAL_ROW_TIME = re.compile(r"时间\s*(\d{1,2}:\d{2})")
+_CAL_ROW_EVENT = re.compile(r"影响经济的时间点\s*(.+)$", re.S)
+
+
 def _calendar_rows(section):
     """
     从财经日历的表格里取「日期 / 时间 / ★★★ 事件」。
 
-    日报表格只在每天第一行写日期（如「09-30 周三今天」），后面几行日期列是空的，
+    日报表格只在每天第一行写日期（如「09-30 周三 今天」/「10-14 周三 T+3」），后面几行日期列是空的，
     所以日期必须按行顺序继承 —— 否则「20:15 ADP」这种行就不知道该算今天还是明天。
+
+    两种版式都认：
+      · 老版：一行三格（日期 / 时间 / 事件）；
+      · 新版：一行一格，整行是「日期（可省）+ 时间 HH:MM + 影响经济的时间点 …」。
     返回 [{"date": "09-30 周三", "tag": "今天", "time": "09:30",
            "country": "中国", "name": "非制造业PMI:商务活动", "month": "9月"}]。
     """
@@ -712,28 +846,51 @@ def _calendar_rows(section):
     for table in section.node.find_all("table"):
         for tr in table.find_all("tr"):
             cells = [_clean_cell(c.text) for c in tr.element_children()]
-            if len(cells) < 3:
-                continue
-            date_cell, time_cell, event_cell = cells[0], cells[1], cells[2]
-            if date_cell in ("日期", "时间"):            # 表头行
-                continue
-            if date_cell:
-                m = re.match(
-                    r"^(\d{2}-\d{2})\s*(周[一二三四五六日])?\s*(今天|明天|昨天)?\s*$",
-                    date_cell,
-                )
-                if not m:
+            if len(cells) >= 3:
+                date_cell, time_cell, event_cell = cells[0], cells[1], cells[2]
+                if date_cell in ("日期", "时间"):            # 表头行
                     continue
+                if date_cell:
+                    m = re.match(
+                        r"^(\d{2}-\d{2})\s*(周[一二三四五六日])?\s*(今天|明天|昨天)?\s*$",
+                        date_cell,
+                    )
+                    if not m:
+                        continue
+                    cur_date = m.group(1) + (f" {m.group(2)}" if m.group(2) else "")
+                    cur_tag = m.group(3) or ""
+                if not time_cell or not event_cell or not cur_date:
+                    continue
+                parsed = _parse_calendar_event(event_cell)
+                if parsed is None:
+                    continue
+                country, name, month = parsed
+                rows.append({
+                    "date": cur_date, "tag": cur_tag, "time": time_cell,
+                    "country": country, "name": name, "month": month,
+                })
+                continue
+
+            # 新版：整行压成一格 —— 日期只有每天第一行有，时间 / 事件写在行内
+            cells = [c for c in cells if c]
+            if not cells:
+                continue
+            text = " ".join(cells)
+            m = _CAL_ROW_DATE.match(text)
+            if m and m.group(1):
                 cur_date = m.group(1) + (f" {m.group(2)}" if m.group(2) else "")
                 cur_tag = m.group(3) or ""
-            if not time_cell or not event_cell or not cur_date:
+                text = text[m.end():]
+            tm = _CAL_ROW_TIME.search(text)
+            em = _CAL_ROW_EVENT.search(text)
+            if not tm or not em or not cur_date:
                 continue
-            parsed = _parse_calendar_event(event_cell)
+            parsed = _parse_calendar_event(em.group(1))
             if parsed is None:
                 continue
             country, name, month = parsed
             rows.append({
-                "date": cur_date, "tag": cur_tag, "time": time_cell,
+                "date": cur_date, "tag": cur_tag, "time": tm.group(1),
                 "country": country, "name": name, "month": month,
             })
     return rows
@@ -829,10 +986,13 @@ def _calendar_day_groups(rows):
 
 
 def _busiest_day(section):
-    """「最密集日」在日报里被归为附注（句尾带「规则合成」字样），单独捞回来当一条。"""
+    """「最密集日」单独捞一条：新版是正常条目，老版被归进附注（句尾带「规则合成」）。"""
     if section is None:
         return None
-    for note in section.notes:
+    picked = _pick(section, ("最密集日",))          # 新版：正常条目
+    if picked:
+        return picked[0]
+    for note in section.notes:                      # 老版：归在附注里
         if "最密集日" not in note:
             continue
         # 末尾的「（规则合成，非方向判断）」是口径说明，不上小屏
@@ -854,15 +1014,100 @@ def _calendar_window_items(section):
     return out
 
 
+def _section_by_name(report, name, *codes):
+    """
+    按栏目名取栏目：「编号 · 名称」整键直取 → 名称整段相等 → 兜底包含匹配。
+
+    之所以不写死编号：日报 2026-10 改版把栏目从 00~03 重排成 00~17，
+    但栏目名（SHORT CARD / FORECAST / ECON CALENDAR）没变；
+    也不能只靠包含匹配 —— 新版里 "FORECAST" 会先命中「02 · QUANT FORECAST」。
+    """
+    for code in codes:
+        section = report.section(f"{code} · {name}")
+        if section is not None:
+            return section
+    for kicker, section in report.sections.items():
+        if re.sub(r"^\s*\d+\s*·\s*", "", kicker).strip() == name:
+            return section
+    return _find_section_by(report, name)
+
+
+def _digest_pickable(item):
+    """速览页只搬「摘要行」：要有标签、有值，且不是逐标的/逐条新闻的流水行。"""
+    if not item.label or not item.value:
+        return False
+    if item.label in DIGEST_SKIP_LABELS or DIGEST_SKIP_LABEL_RE.match(item.label):
+        return False
+    return True
+
+
+def _section_digest_items(section, limit, prefer=()):
+    """
+    整栏进速览页：先按 prefer 里的标签挑（找不到就按顺序补齐），再看多几条，
+    逐标的 / 逐条新闻的大表不搬上小屏。
+    """
+    out, seen = [], set()
+    for label in prefer:
+        item = section.find(label) or section.find_prefix(label)
+        if item is not None and _digest_pickable(item) and id(item) not in seen:
+            out.append(item)
+            seen.add(id(item))
+            if len(out) >= limit:
+                return out
+    for item in section.items:
+        if len(out) >= limit:
+            break
+        if id(item) in seen or not _digest_pickable(item):
+            continue
+        out.append(item)
+        seen.add(id(item))
+    return out
+
+
+def _digest_page_items(report, page_id, has_calendar=False):
+    """
+    第 3 / 4 页的内容。返回 (条目, 用到的栏目原名, 用到的分组名)。
+
+    日报老版式有一栏「AI 全篇速览」按四个分节把全篇摘要串起来，直接切它就行；
+    2026-10 改版后这栏没有了，改成按 DIGEST_PLAN 从各专题栏目取摘要行。
+    """
+    digest = _section_by_name(report, "AI DIGEST", "01")
+    if digest is not None:
+        items = []
+        for group in DIGEST_GROUPS[page_id]:
+            skip = (CALENDAR_DIGEST_DUP,) if (has_calendar and group == "政策与日程") else ()
+            got = _group_value(digest, group, skip_prefixes=skip)
+            if got:
+                items.append(Item(group, "", kind="group"))
+                items.extend(got)
+        return items, [digest.title], list(DIGEST_GROUPS[page_id])
+
+    items, titles, groups = [], [], []
+    for group, sources in DIGEST_PLAN[page_id]:
+        got = []
+        for name, limit, *rest in sources:
+            section = _section_by_name(report, name)
+            if section is None:
+                continue
+            picked = _section_digest_items(section, limit, rest[0] if rest else ())
+            if picked:
+                titles.append(section.title)
+                got.extend(picked)
+        if got:
+            groups.append(group)
+            items.append(Item(group, "", kind="group"))
+            items.extend(got)
+    return items, titles, groups
+
+
 def build_pages(report, fallback_from_disk=False):
     """
     产出 5 页内容：{页码: {"subtitle": 小标题, "items": [Item...]}}
     缺内容的页会退到相邻栏目，保证 5 页都有东西看；实在没有就抛错（不推空白屏）。
     """
-    card = report.section("00 · SHORT CARD") or _find_section_by(report, "SHORT CARD")
-    digest = report.section("01 · AI DIGEST") or _find_section_by(report, "AI DIGEST")
-    forecast = report.section("02 · FORECAST") or _find_section_by(report, "FORECAST")
-    calendar = report.section(CALENDAR_KICKER) or _find_section_by(report, "ECON CALENDAR")
+    card = _section_by_name(report, "SHORT CARD", "00", "17")
+    forecast = _section_by_name(report, "FORECAST", "02", "16")
+    calendar = _section_by_name(report, "ECON CALENDAR", "03", "10")
 
     rows = _calendar_rows(calendar)
     window = _calendar_window_items(calendar)
@@ -899,18 +1144,12 @@ def build_pages(report, fallback_from_disk=False):
         "items": p2,
     }
 
-    # ---- Page 3 / 4：AI 全篇速览（按分节切开） ----
-    for page_id, groups in DIGEST_GROUPS.items():
-        items = []
-        for g in groups:
-            skip = (CALENDAR_DIGEST_DUP,) if (has_calendar and g == "政策与日程") else ()
-            got = _group_value(digest, g, skip_prefixes=skip)
-            if got:
-                items.append(Item(g, "", kind="group"))
-                items.extend(got)
+    # ---- Page 3 / 4：速览（老版式切「AI 全篇速览」的分节；新版式按 DIGEST_PLAN 取整栏摘要） ----
+    for page_id in (3, 4):
+        items, titles, groups = _digest_page_items(report, page_id, has_calendar)
         pages[page_id] = {
-            "subtitle": f"{'上' if page_id == 3 else '下'} · " + " / ".join(groups),
-            "section_title": digest.title if digest else "AI 全篇速览",
+            "subtitle": f"{'上' if page_id == 3 else '下'} · " + " / ".join(groups or DIGEST_GROUPS[page_id]),
+            "section_title": " / ".join(titles[:2]) or "AI 全篇速览",
             # 速览本身已是「每栏一行摘要」，条目多，用紧凑字号换覆盖面
             "density": "compact",
             "items": items,
@@ -931,8 +1170,7 @@ def build_pages(report, fallback_from_disk=False):
 
     # ---- 兜底：某页空了，就从别的栏目挪内容，绝不留白屏 ----
     spares = (
-        _pick(digest, list(DIGEST_GROUPS.get(3, ())) + list(DIGEST_GROUPS.get(4, ())))
-        or _group_value(digest, DIGEST_GROUPS[3][0])
+        [it for pid in (3, 4) for it in pages[pid]["items"] if it.value][:8]
         or [it for it in (forecast.items if forecast else []) if it.value][:8]
         or [it for it in (card.items if card else []) if it.value][:8]
     )
