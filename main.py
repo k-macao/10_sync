@@ -10,8 +10,11 @@ from datetime import datetime, timedelta
 import board_core
 from board_core import (
     API_KEY, MAC_ADDRESS,
-    font_item, font_small, font_title,
-    make_page_header, push_image, set_board_title, set_enabled_pages, wrap_text_by_pixels,
+    CANVAS_W, CONTENT_W, MARGIN_X,
+    draw_top_bar, get_font,
+    font_small,
+    make_page_header, push_image, set_board_title, set_enabled_pages,
+    spread_leading, wrap_text_by_pixels,
 )
 
 
@@ -455,44 +458,65 @@ def source_label(source, override=None):
     return SOURCE_LABELS.get(source, source or "资讯")
 
 
-def draw_news_list(draw, page_title, items, start_idx):
+def draw_news_list(draw, page_title, items, start_idx, page_id=1, total=5):
     """
-    在 400x300 画布上绘制新闻列表。
+    在 400x300 画布上绘制新闻列表（统一顶栏 + 全屏排版）。
+    条目多时照常翻页；余下条目少时自动降字号、把行距摊满整屏，不留大空洞。
     返回本页结束后的下一条索引（供下一页接续，保证同来源两页内容不重叠）。
     """
-    draw.rounded_rectangle([(10, 10), (390, 45)], radius=8, fill=0)
-    # 标题过长时截断，避免溢出圆角条
-    title_text = page_title
-    try:
-        while draw.textlength(title_text, font=font_title) > 360 and len(title_text) > 4:
-            title_text = title_text[:-1]
-        if title_text != page_title:
-            title_text = title_text[:-1] + "…"
-    except Exception:
-        title_text = page_title[:14]
-    draw.text((20, 15), title_text, font=font_title, fill=255)
+    draw_top_bar(draw, page_title, page_id, total)
 
-    y, last_idx = 55, start_idx
-    item_gap = 12
-    line_height = 23
-    for i in range(start_idx, len(items)):
-        lines = wrap_text_by_pixels(draw, items[i], font_item, max_width=340)
-        required_h = len(lines) * line_height
-        if y + required_h > 295:
-            break
-        current_num = i + 1  # 同来源内连续编号：1,2页 1..N；3,4页另起 1..N
-        draw.rounded_rectangle([(10, y), (36, y + 24)], radius=6, fill=0)
-        num_x = 18 if current_num < 10 else 11
-        draw.text((num_x, y + 3), str(current_num), font=font_small, fill=255)
+    body_top, body_bottom = 46, 292
+    avail = body_bottom - body_top
+    text_x = MARGIN_X + 34                 # 序号徽章右侧的正文起点
+    wrap_w = CANVAS_W - MARGIN_X - text_x
+
+    # 自适应档位：(字号, 行高, 条目间距)。挑「装条数只比最多少 1 条」的最大字号：
+    # 既让墨水屏上字够大，又不多丢条目（放不下的条目由下一页接续）。
+    sizes = [(18, 23, 11), (17, 21, 10), (16, 20, 9), (15, 18, 8)]
+
+    def _fill(cand):
+        px, lh, gap = cand
+        fnt = get_font(px)
+        picked, used, units, y_probe = [], 0.0, 0, 0.0
+        for i in range(start_idx, len(items)):
+            lines = wrap_text_by_pixels(draw, items[i], fnt, wrap_w)
+            h = max(22, len(lines) * lh)
+            g = gap if picked else 0.0
+            if y_probe + g + h > avail:
+                break
+            picked.append((i, lines, h))
+            y_probe += g + h
+            used += g + h
+            units += len(lines) + 1
+        return picked, used, units, fnt, lh, gap
+
+    results = [_fill(cand) for cand in sizes]
+    best_count = max((len(r[0]) for r in results), default=0)
+    best = next((r for r in results if len(r[0]) >= best_count - 1 > 0), results[-1])
+    picked, used, units, item_font, line_h, item_gap = best
+    if not picked:
+        return start_idx
+
+    extra, top = spread_leading(used, avail, units, cap=3.0, center_cap=12.0)
+
+    y = body_top + top
+    for k, (i, lines, h) in enumerate(picked):
+        if k:
+            y += item_gap + extra
+            mid = y - (item_gap + extra) / 2
+            draw.line([(text_x, mid), (CANVAS_W - MARGIN_X, mid)], fill=0, width=1)
+        # 序号徽章（同来源内连续编号：1,2页 1..N；3,4页另起 1..N）
+        draw.rounded_rectangle([(MARGIN_X, y), (MARGIN_X + 25, y + 21)], radius=6, fill=0)
+        num = str(i + 1)
+        num_w = draw.textlength(num, font=font_small)
+        draw.text((MARGIN_X + (25 - num_w) / 2, y + 3), num, font=font_small, fill=255)
         curr_y = y + 1
-        for line in lines:
-            draw.text((45, curr_y), line, font=font_item, fill=0)
-            curr_y += line_height
-        y += max(24, required_h) + item_gap
-        last_idx = i + 1
-        if y < 290:
-            draw.line([(45, y - item_gap / 2), (380, y - item_gap / 2)], fill=0, width=1)
-    return last_idx
+        for ln in lines:
+            draw.text((text_x, curr_y), ln, font=item_font, fill=0)
+            curr_y += line_h + extra
+        y += h
+    return picked[-1][0] + 1
 
 
 def dedupe_titles(titles, exclude=None):
@@ -534,7 +558,7 @@ def render_two_pages(titles, page_ids, label, part_names=("一", "二"), dry_run
         # 若本页是组内第一页且被单独启用，从 0 开始；否则接续
         if i == 0:
             start_index = 0
-        end_index = draw_news_list(ImageDraw.Draw(img), page_title, titles, start_index)
+        end_index = draw_news_list(ImageDraw.Draw(img), page_title, titles, start_index, page_id=pid)
         # 防御：若本页一个条目都没画上（数据不够），尽量向后找剩余
         if end_index <= start_index and start_index < len(titles):
             # 仍画空页也 push，避免设备残留旧图；但尽量提示

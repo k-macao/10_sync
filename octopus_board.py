@@ -26,18 +26,23 @@ from PIL import ImageDraw
 import octopus_report as R
 from board_core import (
     CANVAS_W,
-    ENABLED_PAGES,
+    CONTENT_W,
+    MARGIN_X,
     BOARD_TITLE,
-    font_bar,
-    font_bar_num,
+    ENABLED_PAGES,
+    draw_top_bar,
+    fit_text,
     font_foot,
     font_head,
+    font_head_l,
     font_head_s,
     font_label,
+    font_label_l,
     font_label_s,
     font_sub,
     font_tiny,
     font_value,
+    font_value_l,
     font_value_s,
     new_canvas,
     push_image,
@@ -47,23 +52,27 @@ from board_core import (
 # ---------------------------------------------------------------------
 # 版面参数（都在这里，方便按屏调）
 # ---------------------------------------------------------------------
-MARGIN_X = 9
-CONTENT_W = CANVAS_W - MARGIN_X * 2      # 382
 BODY_TOP = 60
 BODY_BOTTOM = 272                          # 正文可用区 60~272
 FOOTER_Y = 277
 NOTE_LINE_H = 15                           # 底部指针行的高度，永远给它留位
 GAP = 4                                    # 条目之间的留白
 TRUNCATE_MARK = "…"
+SUB_RULE_Y = 57                            # 副标题下的一条细分隔线
 
 # 每页底部固定的口径行
 FOOTER_NOTE = "数字与正文同源 · 非投资建议"
 
-# 三档密度（页面在报告里各自声明用哪档）：
+# 四档密度（页面在报告里各自声明用哪档）：
+#   loose   —— 条目少的页面自动升档：字号大一号，把 400×300 铺满、墨水屏上更清楚；
 #   normal  —— 数字面 / 日历页：条目要读清，放不下就整条舍弃；
 #   tight   —— P1 结论面：字号小一号换行数，但同样「宁可整条舍弃、不把句子截半」；
 #   compact —— P3/P4 速览：每条本来就是一行摘要，允许多条上屏、单条最多 2 行。
 DENSITY = {
+    "loose": {
+        "label": font_label_l, "value": font_value_l, "head": font_head_l,
+        "line": 21, "line_head": 23, "gap": 4, "cap": 0, "keep_going": False,
+    },
     "normal": {
         "label": font_label, "value": font_value, "head": font_head,
         "line": 17, "line_head": 19, "gap": 3, "cap": 0, "keep_going": False,
@@ -161,25 +170,20 @@ def _fit_text(draw, text, font, max_width):
     return out + TRUNCATE_MARK
 
 
-def draw_header(draw, title, page_id, total=4):
-    draw.rounded_rectangle([(MARGIN_X, 6), (CANVAS_W - MARGIN_X - 1, 40)], radius=7, fill=0)
-    num = f"{page_id}/{total}"
-    num_w = draw.textlength(num, font=font_bar_num)
-    draw.text(
-        (MARGIN_X + 8, 13),
-        _fit_text(draw, title, font_bar, CONTENT_W - 24 - num_w),
-        font=font_bar, fill=255,
-    )
-    draw.text((CANVAS_W - MARGIN_X - 8 - num_w, 16), num, font=font_bar_num, fill=255)
+def draw_header(draw, title, page_id, total=5):
+    """统一顶栏（board_core 共用骨架）：黑条 + 标题 + 页码。"""
+    draw_top_bar(draw, title, page_id, total)
 
 
 def draw_subtitle(draw, section_title, subtitle, page_id):
-    """顶栏下面一行：左边日报栏目原名（对着微信日报能核对），右边出自哪一页。"""
+    """顶栏下面一行：左边日报栏目原名（对着微信日报能核对），右边出自哪一页；
+    底下一条细分隔线把顶栏区和正文分开。"""
     tail = f"仓库 02 · {page_id} 页"
     tail_w = draw.textlength(tail, font=font_tiny)
-    draw.text((CANVAS_W - MARGIN_X - tail_w, 46), tail, font=font_tiny, fill=0)
+    draw.text((CANVAS_W - MARGIN_X - tail_w, 43), tail, font=font_tiny, fill=0)
     left = " · ".join(x for x in (section_title, subtitle) if x)
-    draw.text((MARGIN_X, 45), _fit_text(draw, left, font_sub, CONTENT_W - tail_w - 8), font=font_sub, fill=0)
+    draw.text((MARGIN_X, 42), _fit_text(draw, left, font_sub, CONTENT_W - tail_w - 8), font=font_sub, fill=0)
+    draw.line([(MARGIN_X, SUB_RULE_Y), (CANVAS_W - MARGIN_X, SUB_RULE_Y)], fill=0, width=1)
 
 
 def draw_footer(draw, meta, note=FOOTER_NOTE):
@@ -226,7 +230,7 @@ def _note_height():
     return NOTE_LINE_H * 2
 
 
-def layout_items(draw, items, page, body_bottom):
+def layout_items(draw, items, page, body_bottom, style=None, pad=0.0):
     """
     只算不画：把条目按顺序铺进正文区，产出绘制指令。
 
@@ -234,11 +238,13 @@ def layout_items(draw, items, page, body_bottom):
       · normal（Page 1/2）：条目少、要读清 → 宁可整条舍弃，也不把中间的条目截半句；
       · compact（Page 3/4）：每条本来就是一行摘要 → 每条最多 cap 行，保证覆盖面。
 
+    style 覆盖页面声明的密度档；pad 为全屏摊满时每行加的行距（px）。
     返回 (ops, drawn, dropped, truncated)
     """
-    style = DENSITY.get(page.get("density", "normal"), DENSITY["normal"])
-    line_h, line_h_head = style["line"], style["line_head"]
-    gap, cap, keep_going = style["gap"], style["cap"], style.get("keep_going", False)
+    if style is None:
+        style = DENSITY.get(page.get("density", "normal"), DENSITY["normal"])
+    line_h, line_h_head = style["line"] + pad, style["line_head"] + pad
+    gap, cap, keep_going = style["gap"] + pad, style["cap"], style.get("keep_going", False)
 
     ops, y, drawn, dropped, truncated = [], BODY_TOP, 0, 0, False
     remaining = list(items)
@@ -251,13 +257,13 @@ def layout_items(draw, items, page, body_bottom):
         if is_group_head:
             # 分节标题只在「后面还放得下下一条的开头两行」时才画，
             # 否则会出现一个光秃秃的标题悬在页脚上方
-            if y + line_h + 4 + line_h_head * 2 > body_bottom:
+            if y + line_h + 4 + pad + line_h_head * 2 > body_bottom:
                 dropped += 1 + len(remaining)
                 break
             ops.append(("group", segs[0].text, y, style["label"]))
             # 分隔线要落在文字下方，不能压到字上
             ops.append(("rule", y + line_h + 1))
-            y += line_h + 4
+            y += line_h + 4 + pad
             drawn += 1
             continue
 
@@ -278,7 +284,7 @@ def layout_items(draw, items, page, body_bottom):
             continue
 
         # 放不下：够「截断后至少两行」就截断（compact 继续铺，normal 到此为止）
-        max_lines = max(0, (body_bottom - y - gap) // lh)
+        max_lines = int(max(0, (body_bottom - y - gap) // lh))
         if max_lines >= 2 and len(lines) > max_lines:
             shown = _clip_lines_to_width(draw, lines[:max_lines], CONTENT_W, reserve=12)
             shown[-1] = _trim_ellipsis(draw, shown[-1], CONTENT_W)
@@ -307,20 +313,77 @@ def overflow_note(draw, dropped, truncated):
     return wrap_text_by_pixels(draw, " ".join(parts), font_foot, CONTENT_W)
 
 
+def _plan(draw, items, page, body_bottom):
+    """
+    全屏排版预算：先试更大字号档（loose），再退到页面声明的密度档，
+    normal 档仍装不下时最后降到 tight 把整条内容救回来（宁可字号小一号，
+    也不白丢条目）；每档内把行距从大到小试，取「装得下且行距最舒展」的一版。
+    都装不下时，取丢条最少的一版（同分保大字号）。
+    返回 (ops, drawn, dropped, truncated)。
+    """
+    decl = page.get("density", "normal")
+    base = DENSITY.get(decl, DENSITY["normal"])
+    cands = []
+    if decl in ("normal", "tight"):
+        cands.append(DENSITY["loose"])
+    cands.append(base)
+    if decl == "normal":
+        cands.append(DENSITY["tight"])
+
+    best = None
+    for style in cands:
+        for pad in (3.0, 2.5, 2.0, 1.5, 1.0, 0.5, 0.0):
+            result = layout_items(draw, items, page, body_bottom, style=style, pad=pad)
+            if not result[2] and not result[3]:
+                return result
+            if pad == 0.0:
+                if best is None or (result[2], result[3]) < (best[2], best[3]):
+                    best = result
+                break
+    return best
+
+
+def _ops_bottom(ops):
+    """绘制指令整体的最低 y（用于算整块内容高度）。"""
+    bottom = 0
+    for op in ops:
+        if op[0] == "paint":
+            bottom = max(bottom, op[2] + len(op[1]) * op[3])
+        elif op[0] == "group":
+            bottom = max(bottom, op[2] + 18)
+        elif op[0] == "rule":
+            bottom = max(bottom, op[1] + 1)
+    return bottom
+
+
+def _shift_ops(ops, dy):
+    """整块下移 dy（顶栏和页脚不动，只挪正文）。"""
+    out = []
+    for op in ops:
+        if op[0] in ("paint", "group"):
+            out.append((op[0], op[1], op[2] + dy, op[3]))
+        elif op[0] == "rule":
+            out.append((op[0], op[1] + dy))
+        else:
+            out.append(op)
+    return out
+
+
 def draw_items(draw, items, page, body_bottom=None):
     """
-    反复排版直到「让出的指针行高度」不再变化（最多 4 轮，正常 1~2 轮就收敛）：
+    全屏自适应排版 + 反复预算「让出的指针行高度」（最多 4 轮，正常 1~2 轮就收敛）：
 
-      第 1 遍按满版高度算；只有在「有内容没上屏 / 被截断」时，
-      才把底部让出指针行的高度再算一遍 —— 保证那行说明永远画得出来、
-      不会压在正文上，同时也不会白白浪费正文空间。
+      · 条目少：自动升大字号、行距摊满、整块垂直居中（400×300 不留大半屏空白）；
+      · 条目多：保持原密度档，只有在「有内容没上屏 / 被截断」时，
+        才把底部让出指针行的高度再算一遍 —— 保证那行说明永远画得出来、
+        不会压在正文上，同时也不会白白浪费正文空间。
     """
     body_bottom = BODY_BOTTOM if body_bottom is None else body_bottom
     reserve = 0
     ops = drawn = dropped = truncated = None
     note_lines = []
     for _ in range(4):
-        ops, drawn, dropped, truncated = layout_items(draw, items, page, body_bottom - reserve)
+        ops, drawn, dropped, truncated = _plan(draw, items, page, body_bottom - reserve)
         if not dropped and not truncated:
             note_lines = []
             break
@@ -329,6 +392,12 @@ def draw_items(draw, items, page, body_bottom=None):
         if need == reserve:
             break
         reserve = need
+
+    # 整块没铺满时往下沉一点（居中观感）；有截断 / 舍弃时保持顶对齐 + 底部指针行
+    if ops and not dropped and not truncated:
+        gap_h = (body_bottom - reserve) - _ops_bottom(ops)
+        if gap_h > 24:
+            ops = _shift_ops(ops, min(20, gap_h // 2))
 
     _run_ops(draw, ops)
     if note_lines:
