@@ -36,18 +36,17 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 import requests
-from PIL import ImageDraw
+from PIL import ImageDraw, ImageFont
 
 from board_core import (
-    CANVAS_W,
-    font_bar,
-    font_bar_num,
-    font_head,
+    CONTENT_W,
+    FONT_PATH,
+    MARGIN_X,
+    draw_top_bar,
     font_tiny,
-    font_value,
-    font_value_s,
     new_canvas,
     push_image,
+    spread_leading,
     wrap_text_by_pixels,
 )
 
@@ -474,57 +473,108 @@ def build_pages(d004, d003, d007):
 
 
 # =====================================================================
-# 🖼️ 渲染 400×300（放不下如实截断 + 「▼ 另有 N 项」）
+# 🖼️ 渲染 400×300（全屏自适应排版；放不下如实截断 + 「▼ 另有 N 项」）
 # =====================================================================
-MARGIN_X = 9
-CONTENT_W = CANVAS_W - MARGIN_X * 2
-BODY_TOP = 48
-BODY_BOTTOM = 290
+BODY_TOP = 44
+BODY_BOTTOM = 288
+NOTE_RESERVE = 15          # 装不下时给「▼ 另有 N 项」指针行预留的高度
+HEAD_MARK_W = 12           # 小标题前的黑色竖条 + 缩进
+
+# 全屏自适应档位：先大后小，选第一套装得下的；最小档仍装不下就如实截断。
+# 每档 = 正文字号/行高 + 小标题字号/行高/段前留白。最小档比旧版更密，
+# 保证内容容量不缩水（宁可字号小，也不多丢条目）。
+_STYLES = [
+    {"body_px": 16, "body_lh": 22, "head_px": 19, "head_lh": 25, "head_gap": 10},
+    {"body_px": 15, "body_lh": 20, "head_px": 18, "head_lh": 23, "head_gap": 9},
+    {"body_px": 14, "body_lh": 19, "head_px": 17, "head_lh": 21, "head_gap": 8},
+    {"body_px": 13, "body_lh": 17, "head_px": 15, "head_lh": 19, "head_gap": 6},
+    {"body_px": 12, "body_lh": 15, "head_px": 14, "head_lh": 18, "head_gap": 5},
+    {"body_px": 12, "body_lh": 13, "head_px": 13, "head_lh": 16, "head_gap": 4},
+]
+
+_FONT_CACHE = {}
 
 
-def _fit(draw, text, font, max_w):
-    if draw.textlength(text, font=font) <= max_w:
-        return text
-    mark = draw.textlength("…", font=font)
-    out = ""
-    for ch in text:
-        if draw.textlength(out + ch, font=font) > max_w - mark:
-            break
-        out += ch
-    return out + "…"
+def _font(px):
+    if px not in _FONT_CACHE:
+        _FONT_CACHE[px] = ImageFont.truetype(FONT_PATH, px)
+    return _FONT_CACHE[px]
+
+
+def _layout_rows(draw, rows, style):
+    """折行并量高：返回 (blocks, used_h, n_lines)。
+
+    block = {"kind", "lines", "font", "lh", "gap", "h"}；gap 为该块上方留白。
+    小标题（head）与重点行（text）用大一号字，正文（small）用正文字号。
+    """
+    body_font = _font(style["body_px"])
+    head_font = _font(style["head_px"])
+    blocks, used, n_lines = [], 0.0, 0
+    for kind, text in rows:
+        if kind == "head":
+            font, lh, gap = head_font, style["head_lh"], style["head_gap"]
+            lines = wrap_text_by_pixels(draw, text, font, CONTENT_W - HEAD_MARK_W)
+        elif kind == "text":
+            font, lh, gap = head_font, style["head_lh"], 0
+            lines = wrap_text_by_pixels(draw, text, font, CONTENT_W)
+        else:
+            font, lh, gap = body_font, style["body_lh"], 0
+            lines = wrap_text_by_pixels(draw, text, font, CONTENT_W)
+        h = gap + len(lines) * lh
+        blocks.append({"kind": kind, "lines": lines, "font": font, "lh": lh, "gap": gap, "h": h})
+        used += h
+        n_lines += len(lines)
+    return blocks, used, n_lines
 
 
 def render_page(rows, page_id, sub, tail, meta, out_path=None, title=TITLE, total=5):
-    """一页 400×300 1-bit：顶栏 + 正文（只留正文）。
+    """一页 400×300 1-bit：统一顶栏 + 全屏自适应正文（只留正文）。
 
     按「每屏只要正文」口径：不画副标题 / 来源 / 页脚（sub、tail、meta 形参保留兼容旧调用）。
+    条目少时自动升大字号、行距摊满整屏；最小档仍装不下的，按顺序截断并写
+    「▼ 另有 N 项」。
     """
     img = new_canvas()
     draw = ImageDraw.Draw(img)
+    draw_top_bar(draw, title or TITLE, page_id, total)
 
-    draw.rounded_rectangle([(MARGIN_X, 6), (CANVAS_W - MARGIN_X - 1, 40)], radius=7, fill=0)
-    num = f"{page_id}/{total}"
-    num_w = draw.textlength(num, font=font_bar_num)
-    draw.text((MARGIN_X + 8, 13), _fit(draw, title, font_bar, CONTENT_W - 24 - num_w), font=font_bar, fill=255)
-    draw.text((CANVAS_W - MARGIN_X - 8 - num_w, 16), num, font=font_bar_num, fill=255)
-
-    y = BODY_TOP
-    dropped = 0
-    for idx, (kind, text) in enumerate(rows):
-        font = {"head": font_head, "text": font_value, "small": font_value_s}[kind]
-        line_h = {"head": 17, "text": 15, "small": 13}[kind]
-        gap = 4 if kind == "head" else 0
-        lines = wrap_text_by_pixels(draw, text, font, CONTENT_W)
-        if y + len(lines) * line_h + gap > BODY_BOTTOM - 14:
-            dropped = len(rows) - idx
+    avail = BODY_BOTTOM - BODY_TOP
+    chosen = None
+    for style in _STYLES:
+        blocks, used, n_lines = _layout_rows(draw, rows, style)
+        if used <= avail:
+            chosen = (blocks, used, n_lines)
             break
-        for ln in lines:
-            draw.text((MARGIN_X, y), ln, font=font, fill=0)
-            y += line_h
-        y += gap
+
+    dropped = 0
+    if chosen is None:
+        blocks, used, n_lines = _layout_rows(draw, rows, _STYLES[-1])
+        limit = avail - NOTE_RESERVE
+        keep, y = [], 0.0
+        for b in blocks:
+            if y + b["h"] > limit:
+                break
+            keep.append(b)
+            y += b["h"]
+        dropped = len(rows) - len(keep)
+        chosen = (keep, y, sum(len(b["lines"]) for b in keep))
+
+    blocks, used, n_lines = chosen
+    extra, top = spread_leading(used, avail, n_lines) if not dropped else (0.0, 0.0)
+
+    y = BODY_TOP + top
+    for b in blocks:
+        y += b["gap"]
+        for ln in b["lines"]:
+            if b["kind"] == "head":
+                draw.rectangle([MARGIN_X, y + 2, MARGIN_X + 3, y + b["font"].size - 2], fill=0)
+                draw.text((MARGIN_X + HEAD_MARK_W, y), ln, font=b["font"], fill=0)
+            else:
+                draw.text((MARGIN_X, y), ln, font=b["font"], fill=0)
+            y += b["lh"] + extra
 
     if dropped:
-        draw.text((MARGIN_X, BODY_BOTTOM - 2), f"▼ 另有 {dropped} 项 · 全文见五页简报", font=font_tiny, fill=0)
+        draw.text((MARGIN_X, BODY_BOTTOM - 13), f"▼ 另有 {dropped} 项 · 全文见五页简报", font=font_tiny, fill=0)
 
     if out_path:
         img.save(out_path)

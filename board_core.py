@@ -9,6 +9,7 @@ board_core —— 墨水屏看板的公共底层（两块看板共用）
     push_image()               推一张 1-bit PNG 到 Zectrix 指定页
     wrap_text_by_pixels()      按像素宽度折行
     make_page_header()         顶栏文案（五页统一）
+    draw_top_bar() / fit_text() / spread_leading()   400×300 共用版面骨架
     set_enabled_pages() / set_board_title()   供 main.py 的命令行覆盖调用
 """
 
@@ -62,9 +63,79 @@ try:
     font_label_s = ImageFont.truetype(FONT_PATH, 13)
     font_value_s = ImageFont.truetype(FONT_PATH, 12)
     font_head_s = ImageFont.truetype(FONT_PATH, 13)
+    # 宽松档：条目少的页面自动升档，字号大一号把 400×300 铺满、在墨水屏上更清楚
+    font_label_l = ImageFont.truetype(FONT_PATH, 17)
+    font_value_l = ImageFont.truetype(FONT_PATH, 16)
+    font_head_l = ImageFont.truetype(FONT_PATH, 18)
 except Exception:  # noqa: BLE001
     print(f"❌ 错误: 找不到字体 {FONT_PATH}（请把 .ttf 字体重命名为 font.ttf 放在根目录）")
     raise SystemExit(1)
+
+
+# =====================================================================
+# 🖼️ 400×300 版面骨架（三块看板共用：统一顶栏 / 边距 / 全屏摊满小工具）
+# =====================================================================
+MARGIN_X = 10                    # 左右外边距（正文宽 CONTENT_W = 380）
+CONTENT_W = CANVAS_W - MARGIN_X * 2
+HEADER_TOP, HEADER_BOTTOM = 6, 38   # 顶栏黑条（半页视觉锚点，正文从 44 起）
+HEADER_PAD = 9                   # 顶栏内左右留白
+
+
+_FONT_CACHE = {}
+
+
+def get_font(px):
+    """按需取任意字号的字模（带缓存），排版引擎用。"""
+    if px not in _FONT_CACHE:
+        _FONT_CACHE[px] = ImageFont.truetype(FONT_PATH, px)
+    return _FONT_CACHE[px]
+
+
+def fit_text(draw, text, font, max_w, mark="…"):
+    """超宽按像素截断并加省略号（墨水屏宁可少字也不溢出）。"""
+    if draw.textlength(text, font=font) <= max_w:
+        return text
+    mw = draw.textlength(mark, font=font)
+    out = ""
+    for ch in text:
+        if draw.textlength(out + ch, font=font) > max_w - mw:
+            break
+        out += ch
+    return out + mark
+
+
+def draw_top_bar(draw, title, page_id, total=5):
+    """统一顶栏：黑色圆角条 + 白字标题 + 右上页码，三块看板一个样。"""
+    draw.rounded_rectangle(
+        [(MARGIN_X, HEADER_TOP), (CANVAS_W - MARGIN_X - 1, HEADER_BOTTOM)],
+        radius=6, fill=0,
+    )
+    num = f"{page_id}/{total}"
+    num_w = draw.textlength(num, font=font_bar_num)
+    draw.text(
+        (MARGIN_X + HEADER_PAD, 11),
+        fit_text(draw, title, font_bar, CONTENT_W - HEADER_PAD * 2 - num_w),
+        font=font_bar, fill=255,
+    )
+    draw.text(
+        (CANVAS_W - MARGIN_X - HEADER_PAD - num_w, 15),
+        num, font=font_bar_num, fill=255,
+    )
+
+
+def spread_leading(used_h, box_h, n_units, cap=6.0, center_cap=24.0):
+    """
+    全屏摊满：内容不足一屏时把余量摊进行距（每行最多 +cap px），
+    仍剩得多就整体下移一点（居中观感，最多 +center_cap）。
+    返回 (每行加的行距 px, 顶部偏移 px)。
+    """
+    if n_units <= 0 or used_h >= box_h:
+        return 0.0, 0.0
+    leftover = box_h - used_h
+    extra = min(cap, leftover / n_units)
+    leftover -= extra * n_units
+    top = min(center_cap, leftover * 0.5) if leftover > 20 else 0.0
+    return extra, top
 
 
 def set_enabled_pages(pages):

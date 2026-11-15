@@ -44,7 +44,8 @@ python3 brief_board.py --max-age-hours 0       # 关闭 004 新鲜度校验（�
 
 ## 📌 看板显示内容（打氧日报模式 mode=octopus）
 
-适配 400×300 分辨率，共 5 页（**顶栏五页统一**，正文互不重复）：
+适配 400×300 分辨率，共 5 页（**顶栏五页统一**，正文互不重复）。**全屏排版**：条目少自动升大字号、
+行距摊满整屏并垂直居中；条目多保持标准密度，放不下才降档救条目。
 
 | 页 | 顶栏 | 来自仓库 02 的栏目（2026-10 新版 00~17） | 内容策略 |
 |---|---|---|---|
@@ -135,7 +136,8 @@ ENABLED_PAGES      = "1,2,3,4,5"  # 控制推哪几页（1,2,3,4 = 不推日历�
 - 顶栏 / 启用页：编辑 `board_core.py` 顶部（见上）。
 - 5 页各放哪些内容：编辑 `octopus_report.py` 的 `P1_KEEP` / `P2_KEEP` / `DIGEST_GROUPS` /
   `CALENDAR_WINDOW_LABELS`。
-- 版面参数（字号、行高、留白）：编辑 `octopus_board.py` 顶部的 `MARGIN_X` / `BODY_TOP` / `DENSITY`。
+- 版面参数（字号、行高、留白）：边距 / 顶栏 / 全屏摊满工具在 `board_core.py` 的「400×300 版面骨架」，
+  正文区与密度档在 `octopus_board.py` 顶部的 `BODY_TOP` / `DENSITY`（loose 档用于条目少自动升字号）。
 
 ### 5. Actions 全自动推
 
