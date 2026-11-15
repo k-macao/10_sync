@@ -122,7 +122,7 @@ def render(page_id):
     os.makedirs(OUT_DIR, exist_ok=True)
     out = os.path.join(OUT_DIR, f"page_{page_id}.png")
     _, dropped = brief_board.render_page(
-        spec["rows"], page_id, spec["sub"], spec["tail"], spec["meta"],
+        brief_board.body_only_rows(spec["rows"]), page_id, spec["sub"], spec["tail"], spec["meta"],
         title=TITLE, out_path=out,
     )
     print(f"✅ {out}" + (f"（▼ 另有 {dropped} 项）" if dropped else ""))

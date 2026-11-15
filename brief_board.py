@@ -4,12 +4,13 @@
 brief_board —— 「004/003/007 五页简报」常驻看板：拉取三个仓库的最新内容原文，
 排成 5 页 400×300 墨水屏并推送到 Zectrix。
 
-5 页分工（顶栏五页统一「章鱼 AI·全景分析」，正文一律仓库原文，不加说明注释）：
+5 页分工（顶栏五页统一「章鱼 AI·全景分析」，每屏只留正文：原文正文行 + 小标题，
+出处 / 编号 / 权重 / 系统日志 / 图例 / 条形图 / 配置行等非正文行一律不上屏）：
     Page 1  仓库 004 · 00 / 每日 VIX 恐慌指数 + 07 / 核心结论（最后结论）
     Page 2  仓库 003 · 机会点 / 风险点（条目整段原文）
     Page 3  机会节点（每行一个节点，原文原句）
     Page 4  仓库 007 · 研报 AI 风险点提示 · 指标面（美银牛熊 B&B 字符卡 + 六大分项）
-    Page 5  仓库 007 · 研报 AI 风险点提示（栏目口径 / AI 提示词 / 触发关键词 / 兜底段落）
+    Page 5  仓库 007 · 研报 AI 风险点提示（栏目口径 / 兜底段落 / 尾注）
 
 数据源（每次运行现拉，随三仓库更新自动刷新）：
     004  https://k-macao.github.io/004/                     （GitHub Pages 最新构建报告）
@@ -41,9 +42,7 @@ from board_core import (
     CANVAS_W,
     font_bar,
     font_bar_num,
-    font_foot,
     font_head,
-    font_sub,
     font_tiny,
     font_value,
     font_value_s,
@@ -361,8 +360,57 @@ def bofa_card_lines(bofa):
 # =====================================================================
 # 🧱 五页内容计划
 # =====================================================================
+def _body_line(text):
+    """一行原文 → 正文行；非正文返回 None（不上屏）。
+
+    过滤口径（每屏只要正文）：条目编号 / 出处行 / 权重尾巴 / 扫描系统行 /
+    状态注释 / 日志与观看量等元数据行 / 条形图 / 图例 / 配置行（关键词、prompt）/
+    数据日期与来源备注。多空概率（「多 X% / 空 Y%」）保留。
+    """
+    t = text.strip()
+    if re.fullmatch(r"#\d+", t):  # 条目编号 #1 / #2
+        return None
+    if t.startswith("DIR ▸"):  # 出处行
+        return None
+    if t.startswith(("FRESHNESS CHECK", "超时 / 无法验证")):  # 扫描系统行
+        return None
+    if "SCAN_ERROR" in t or "Too Many Requests" in t or (t.startswith("[") and "未完成读取" in t):
+        return None  # 读取失败日志
+    if t.startswith(("字幕已读取", "AI 多空概率", "仅供参考，不做推荐")):  # 状态 / 标签 / 注释行
+        return None
+    if t.startswith("C:\\"):  # 日志行（3 小时前 · 观看量 · 粉丝量 · 时效验证…）
+        return None
+    if "█" in t or "░" in t:  # 条形图（多空比例图等）
+        return None
+    if re.match(r"^<\d+ 极低", t):  # VIX 分档图例
+        return None
+    if t.startswith("按 BofA 惯例"):  # BofA 信号映射图例
+        return None
+    if t.startswith(("数据日期：", "来源：", "最近一期公布")):  # 007 备注行
+        return None
+    if t.startswith("下调|减持|") or t.startswith("放在最开头："):  # 关键词 / prompt 配置行
+        return None
+    return re.sub(r" ?· 权重 \d+%", "", t)  # 权重尾巴去掉，多空概率保留
+
+
+def body_only_rows(rows):
+    """(kind, 原文行) 列表 → 只留正文的 rows（head 小标题原样保留）。"""
+    out = []
+    for kind, t in rows:
+        if kind == "head":
+            out.append((kind, t))
+            continue
+        line = _body_line(t)
+        if line is not None:
+            out.append((kind, line))
+    return out
+
+
 def build_pages(d004, d003, d007):
-    """三仓库数据 → 5 页 rows（正文一律原文行）。"""
+    """三仓库数据 → 5 页 rows（正文一律原文行，每屏只留正文）。"""
+    opp = [t for t in (_body_line(ln) for ln in d003["opp"]) if t is not None]
+    risk = [t for t in (_body_line(ln) for ln in d003["risk"]) if t is not None]
+
     p1_rows = (
         [("head", "00 / 每日 VIX 恐慌指数")]
         + [("small", ln) for ln in d004["vix"]]
@@ -371,11 +419,11 @@ def build_pages(d004, d003, d007):
         + [("small", ln) for ln in d004["conclusion"]]
     )
 
-    p2_rows = [("head", "机会点")] + [("small", ln) for ln in d003["opp"]]
-    p2_rows += [("head", "风险点")] + [("small", ln) for ln in d003["risk"]]
+    p2_rows = [("head", "机会点")] + [("small", ln) for ln in opp]
+    p2_rows += [("head", "风险点")] + [("small", ln) for ln in risk]
 
     nodes = []
-    for ln in d003["opp"]:
+    for ln in opp:
         if ln.startswith("*") or ln.startswith(">") or ln.startswith("偏多") or re.match(r"\d{2}:\d{2} ", ln):
             nodes.append(ln)
         elif ln == "触及下轨极度恐慌时寻找左侧买点":
@@ -417,11 +465,11 @@ def build_pages(d004, d003, d007):
     ] + [("small", ln) for ln in d007["tail"]]
 
     return {
-        1: {"sub": "004 · 00 VIX + 07 核心结论", "tail": "仓库 004", "rows": p1_rows},
-        2: {"sub": "003 · 机会点 / 风险点", "tail": "仓库 003", "rows": p2_rows},
-        3: {"sub": "机会节点 · 每行一个", "tail": "004+003", "rows": p3_rows},
-        4: {"sub": "007 · 研报 AI 风险点提示", "tail": "仓库 007", "rows": p4_rows},
-        5: {"sub": "007 · 研报 AI 风险点提示", "tail": "仓库 007", "rows": p5_rows},
+        1: {"sub": "004 · 00 VIX + 07 核心结论", "tail": "仓库 004", "rows": body_only_rows(p1_rows)},
+        2: {"sub": "003 · 机会点 / 风险点", "tail": "仓库 003", "rows": body_only_rows(p2_rows)},
+        3: {"sub": "机会节点 · 每行一个", "tail": "004+003", "rows": body_only_rows(p3_rows)},
+        4: {"sub": "007 · 研报 AI 风险点提示", "tail": "仓库 007", "rows": body_only_rows(p4_rows)},
+        5: {"sub": "007 · 研报 AI 风险点提示", "tail": "仓库 007", "rows": body_only_rows(p5_rows)},
     }
 
 
@@ -430,10 +478,8 @@ def build_pages(d004, d003, d007):
 # =====================================================================
 MARGIN_X = 9
 CONTENT_W = CANVAS_W - MARGIN_X * 2
-BODY_TOP = 62
-BODY_BOTTOM = 272
-FOOTER_Y = 277
-FOOTER_NOTE = "数字与正文同源 · 非投资建议"
+BODY_TOP = 48
+BODY_BOTTOM = 290
 
 
 def _fit(draw, text, font, max_w):
@@ -449,7 +495,10 @@ def _fit(draw, text, font, max_w):
 
 
 def render_page(rows, page_id, sub, tail, meta, out_path=None, title=TITLE, total=5):
-    """一页 400×300 1-bit：顶栏 + 副标题 + 正文（原文行）+ 页脚口径行。"""
+    """一页 400×300 1-bit：顶栏 + 正文（只留正文）。
+
+    按「每屏只要正文」口径：不画副标题 / 来源 / 页脚（sub、tail、meta 形参保留兼容旧调用）。
+    """
     img = new_canvas()
     draw = ImageDraw.Draw(img)
 
@@ -458,10 +507,6 @@ def render_page(rows, page_id, sub, tail, meta, out_path=None, title=TITLE, tota
     num_w = draw.textlength(num, font=font_bar_num)
     draw.text((MARGIN_X + 8, 13), _fit(draw, title, font_bar, CONTENT_W - 24 - num_w), font=font_bar, fill=255)
     draw.text((CANVAS_W - MARGIN_X - 8 - num_w, 16), num, font=font_bar_num, fill=255)
-
-    tail_w = draw.textlength(tail, font=font_tiny)
-    draw.text((CANVAS_W - MARGIN_X - tail_w, 46), tail, font=font_tiny, fill=0)
-    draw.text((MARGIN_X, 45), _fit(draw, sub, font_sub, CONTENT_W - tail_w - 8), font=font_sub, fill=0)
 
     y = BODY_TOP
     dropped = 0
@@ -480,11 +525,6 @@ def render_page(rows, page_id, sub, tail, meta, out_path=None, title=TITLE, tota
 
     if dropped:
         draw.text((MARGIN_X, BODY_BOTTOM - 2), f"▼ 另有 {dropped} 项 · 全文见五页简报", font=font_tiny, fill=0)
-
-    draw.line([(MARGIN_X, FOOTER_Y - 3), (CANVAS_W - MARGIN_X, FOOTER_Y - 3)], fill=0, width=1)
-    right_w = draw.textlength(FOOTER_NOTE, font=font_foot)
-    draw.text((CANVAS_W - MARGIN_X - right_w, FOOTER_Y), FOOTER_NOTE, font=font_foot, fill=0)
-    draw.text((MARGIN_X, FOOTER_Y), _fit(draw, meta, font_foot, CONTENT_W - right_w - 10), font=font_foot, fill=0)
 
     if out_path:
         img.save(out_path)
