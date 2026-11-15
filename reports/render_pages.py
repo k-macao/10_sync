@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+render_pages.py —— 把「五页简报 2026-11-15」（仓库 004 / 003 / 007 提取稿）
+渲染成 5 张 400×300 墨水屏页面（1-bit PNG），供极趣墨水屏看板预览。
+
+正文一律为仓库原文（不加说明注释）；版式复用 board_core 的字体与画布约定
+（顶栏黑条 + 副标题 + 正文 + 页脚口径行）。放不下时如实截断并写明
+「▼ 另有 N 项 · 全文见五页简报」，完整原文见 reports/five-page-brief-2026-11-15.md。
+
+用法（仓库根目录）：
+    python3 reports/render_pages.py            # 输出 reports/pages/page_1..5.png
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from PIL import ImageDraw  # noqa: E402
+
+from board_core import (  # noqa: E402
+    CANVAS_W,
+    font_bar,
+    font_bar_num,
+    font_foot,
+    font_head,
+    font_sub,
+    font_tiny,
+    font_value,
+    font_value_s,
+    new_canvas,
+    wrap_text_by_pixels,
+)
+
+OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pages")
+MARGIN_X = 9
+CONTENT_W = CANVAS_W - MARGIN_X * 2
+BODY_TOP = 62
+BODY_BOTTOM = 272
+FOOTER_Y = 277
+FOOTER_NOTE = "数字与正文同源 · 非投资建议"
+
+TITLE = "章鱼 AI·全景分析"
+
+# 每页正文：("head"|"text"|"small", 原文) 列表
+PAGES = {
+    1: {
+        "sub": "004 · 00 VIX + 07 核心结论",
+        "tail": "仓库 004 · 11-15",
+        "meta": "仓库 004 · 2026-11-15",
+        "rows": [
+            ("head", "00 / 每日 VIX 恐慌指数"),
+            ("text", "CBOE VIX 19.30 +0.60 / +3.21%常态波动定价"),
+            ("small", "<12 极低12–20 常态20–30 升温30–40 高压≥40 极端"),
+            ("small", "今日判读：常态波动定价 · 恐慌定价升温。市场仍在常态波动区间内，继续结合日变动与期限结构观察。行情日期 2026-11-13 · 30 天隐含波动 ±5.53% · 较前收上升"),
+            ("small", "●恒指涨跌幅：−1.55%"),
+            ("head", "07 / 核心结论"),
+            ("small", "港股盘面：11 月 13 日恒指 23,637.60（−1.55%），恒科 —（—）；[11 月 13 日] 港股风向标｜全球AI调整情绪扩散 空头发力恒指失守24000点。"),
+            ("small", "宏观与离岸流动性：[11 月 14 日] 🔻聊美国，不聊通胀聊就业数据。🔻聊日本，不聊总体通胀聊核心通胀，因为核心通胀排除了生鲜食品。🔻这就叫输有输的赢法。🔻实际上，9 月日本核心CPI 是 2.1%（8 月 1.7%，九个月来首破2%），但“核心的核心”（除生鲜+ 能源）是 2.4%，因为能源被补贴压住，也就是说；美联储与汇率面：[11 月 14 日] 10月出口大增35.2%；英伟达跌破4万亿美元｜一周热点回顾。"),
+            ("small", "大宗与机构跟踪：现货黄金 3,886（+0.03%）；商品面：[11 月 15 日] 新华财经早报：11月15日。"),
+            ("small", "社区多空分布：偏多 2 家 · 偏空 0 家 · 中性 24 家 · 多空分歧 0 家。"),
+            ("small", "⚠️ 风险提示：仅供参考，不构成投资建议。数据可能延迟，操作前请核实最新实时数据。"),
+        ],
+    },
+    2: {
+        "sub": "003 · 机会点 / 风险点",
+        "tail": "仓库 003 · 11-15",
+        "meta": "仓库 003 · 2026-11-15",
+        "rows": [
+            ("head", "机会点"),
+            ("small", "*恒指重返萬八關，內房板塊集體反彈"),
+            ("small", "*台股創新高，權值股法說會成焦點"),
+            ("small", "> 港股午後跌幅收窄 恒指重上18000點 內房板塊反彈"),
+            ("small", "多 64% / 空 36% · 权重 64%"),
+            ("small", "偏多：反弹 / 內房 / 恒指"),
+            ("small", "触及下轨极度恐慌时寻找左侧买点"),
+            ("head", "风险点"),
+            ("small", "*美聯儲官員對利率路徑分歧加大"),
+            ("small", "> 美聯儲議息紀錄顯示官員分歧擴大"),
+            ("small", "多 47% / 空 53% · 权重 36%"),
+            ("small", "中性：分歧 / 利率路径"),
+            ("small", "[3] 游庭皓的財經皓角 · 未完成读取"),
+            ("small", "> YouTube 返回 429 Too Many Requests"),
+            ("small", "接近上轨极度贪婪时考虑分批止盈"),
+        ],
+    },
+    3: {
+        "sub": "机会节点 · 每行一个",
+        "tail": "004+003 · 11-15",
+        "meta": "仓库 004 + 003 · 2026-11-15",
+        "rows": [
+            ("small", "恒指重返萬八關，內房板塊集體反彈"),
+            ("small", "台股創新高，權值股法說會成焦點"),
+            ("small", "港股午後跌幅收窄 恒指重上18000點 內房板塊反彈"),
+            ("small", "偏多：反弹 / 內房 / 恒指"),
+            ("small", "內房股集體反彈，碧桂園升幅領先。"),
+            ("small", "分析師指短期阻力喺18200點水平。"),
+            ("small", "大众情绪指数 58/100 · 谨慎乐观"),
+            ("small", "多 58% / 空 42%"),
+            ("small", "触及下轨极度恐慌时寻找左侧买点"),
+            ("small", "11月13日港股通净买入23.33亿港元"),
+            ("small", "社区多空：偏多 2 / 偏空 0 / 中性 24 / 分歧 0（共 26 源）"),
+            ("small", "现货黄金 3,886（+0.03%）"),
+            ("small", "多头有效性参考位：恒指前收盘 24,008.60（当日 23,637.60），失守前收盘即视为当日多头逻辑未成立"),
+        ],
+    },
+    4: {
+        "sub": "007 · 研报 AI 风险点提示",
+        "tail": "仓库 007 · 11-15",
+        "meta": "仓库 007 · 2026-11-15",
+        "rows": [
+            ("head", "📊 美银牛熊指标 · BofA Bull & Bear (B&B)"),
+            ("text", "BofA Bull & Bear (B&B) 7.2 NEUTRAL prev 7.4 (-0.2)"),
+            ("small", "数据日期：截至 2026-10-21（25 天前）· ⏳ 已过期"),
+            ("small", "来源：BofA The Flow Show 2026-10-22"),
+            ("small", "按 BofA 惯例把读数映射为信号：<2.0 反向买入，>8.0 反向卖出，其余中性。"),
+            ("small", "对冲基金仓位 64% · 股票资金流向 89% · 债券资金流向 62% · 信贷市场技术面 55% · 全球股指广度 21% · 基金经理调查仓位 100%"),
+            ("small", "最近一期公布，可能与聚合读数不同期（2026-10-01）"),
+            ("head", "简报固定章节顺序"),
+            ("small", "2. 风险提示：⚠️ 研报 AI 风险点提示（市场级风险、机构评级下调/分歧预警及触发信号）"),
+        ],
+    },
+    5: {
+        "sub": "007 · 研报 AI 风险点提示",
+        "tail": "仓库 007 · 11-15",
+        "meta": "仓库 007 · 2026-11-15",
+        "rows": [
+            ("head", "⚠️ 研报 AI 风险点提示"),
+            ("small", "（市场级风险、机构评级下调/分歧预警及触发信号）"),
+            ("small", "下调|减持|卖出|中性|谨慎|风险|承压|回调|警告|分歧|放缓|通胀|衰退"),
+            ("small", "先把丑话说在前面。盘面上热闹归热闹，但下面这几处暗礁眼下还真不能假装看不见——尤其是机构开始收紧口径的地方，往往藏着资金最真实的顾虑："),
+            ("small", "坦白讲，眼下这个时间窗抓到的有效快讯和研报样本偏少——或许正赶上休市空窗，又或许是部分公开信源暂时卡壳。越是这种像在薄雾里开车的时刻，越别急着重仓押单边，等跨市场的暗流看清了再落子也不迟。"),
+            ("small", "仅供参考，分析研究。"),
+            ("small", "作者：章鱼 ai"),
+        ],
+    },
+}
+
+
+def fit(draw, text, font, max_w):
+    if draw.textlength(text, font=font) <= max_w:
+        return text
+    mark = draw.textlength("…", font=font)
+    out = ""
+    for ch in text:
+        if draw.textlength(out + ch, font=font) > max_w - mark:
+            break
+        out += ch
+    return out + "…"
+
+
+def render(page_id):
+    spec = PAGES[page_id]
+    img = new_canvas()
+    draw = ImageDraw.Draw(img)
+
+    # 顶栏
+    draw.rounded_rectangle([(MARGIN_X, 6), (CANVAS_W - MARGIN_X - 1, 40)], radius=7, fill=0)
+    num = f"{page_id}/5"
+    num_w = draw.textlength(num, font=font_bar_num)
+    draw.text((MARGIN_X + 8, 13), fit(draw, TITLE, font_bar, CONTENT_W - 24 - num_w), font=font_bar, fill=255)
+    draw.text((CANVAS_W - MARGIN_X - 8 - num_w, 16), num, font=font_bar_num, fill=255)
+
+    # 副标题：左栏目名，右来源
+    tail_w = draw.textlength(spec["tail"], font=font_tiny)
+    draw.text((CANVAS_W - MARGIN_X - tail_w, 46), spec["tail"], font=font_tiny, fill=0)
+    draw.text((MARGIN_X, 45), fit(draw, spec["sub"], font_sub, CONTENT_W - tail_w - 8), font=font_sub, fill=0)
+
+    # 正文：顺序排版，放不下就从该条起整体截断，如实注明
+    y = BODY_TOP
+    dropped = 0
+    for idx, (kind, text) in enumerate(spec["rows"]):
+        font = {"head": font_head, "text": font_value, "small": font_value_s}[kind]
+        line_h = {"head": 17, "text": 15, "small": 13}[kind]
+        gap = 4 if kind == "head" else 0
+        lines = wrap_text_by_pixels(draw, text, font, CONTENT_W)
+        need = len(lines) * line_h + gap
+        if y + need > BODY_BOTTOM - 14:
+            dropped = len(spec["rows"]) - idx
+            break
+        for ln in lines:
+            draw.text((MARGIN_X, y), ln, font=font, fill=0)
+            y += line_h
+        y += gap
+
+    if dropped:
+        note = f"▼ 另有 {dropped} 项 · 全文见五页简报"
+        draw.text((MARGIN_X, BODY_BOTTOM - 2), note, font=font_tiny, fill=0)
+
+    # 页脚
+    draw.line([(MARGIN_X, FOOTER_Y - 3), (CANVAS_W - MARGIN_X, FOOTER_Y - 3)], fill=0, width=1)
+    right_w = draw.textlength(FOOTER_NOTE, font=font_foot)
+    draw.text((CANVAS_W - MARGIN_X - right_w, FOOTER_Y), FOOTER_NOTE, font=font_foot, fill=0)
+    draw.text((MARGIN_X, FOOTER_Y), fit(draw, spec["meta"], font_foot, CONTENT_W - right_w - 10), font=font_foot, fill=0)
+
+    os.makedirs(OUT_DIR, exist_ok=True)
+    out = os.path.join(OUT_DIR, f"page_{page_id}.png")
+    img.save(out)
+    print(f"✅ {out}" + (f"（▼ 另有 {dropped} 项）" if dropped else ""))
+    return out
+
+
+if __name__ == "__main__":
+    for pid in sorted(PAGES):
+        render(pid)
