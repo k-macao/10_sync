@@ -191,14 +191,67 @@ class TestBuildPages(unittest.TestCase):
         ]:
             self.assertIn(expect, nodes)
 
-    def test_page4_page5_risk_prompt(self):
+    def test_page4_page5_body_only(self):
         p4 = [ln for _, ln in self.pages[4]["rows"]]
+        self.assertIn("📊 美银牛熊指标 · BofA Bull & Bear (B&B)", p4)
+        self.assertTrue(any(ln.startswith("BofA Bull & Bear (B&B) 8.8 SELL") for ln in p4))
+        self.assertTrue(any(ln.startswith("对冲基金仓位 64%") for ln in p4))
         self.assertTrue(any(ln.startswith("2. 风险提示：⚠️ 研报 AI 风险点提示") for ln in p4))
+        for noise in ("数据日期", "来源：", "按 BofA 惯例", "最近一期公布"):
+            self.assertFalse(any(noise in ln for ln in p4))
         p5 = [ln for _, ln in self.pages[5]["rows"]]
         self.assertIn("⚠️ 研报 AI 风险点提示", p5)
         self.assertIn("（市场级风险、机构评级下调/分歧预警及触发信号）", p5)
-        self.assertTrue(any(ln.startswith("下调|减持|") for ln in p5))
-        self.assertTrue(any(ln.startswith("放在最开头：") for ln in p5))
+        self.assertTrue(any(ln.startswith("先把丑话说在前面") for ln in p5))
+        self.assertTrue(any(ln.startswith("坦白讲，眼下") for ln in p5))
+        self.assertIn("仅供参考，分析研究。", p5)
+        self.assertIn("作者：章鱼 ai", p5)
+        self.assertFalse(any(ln.startswith("下调|减持|") for ln in p5))
+        self.assertFalse(any(ln.startswith("放在最开头：") for ln in p5))
+
+
+class TestBodyFilter(unittest.TestCase):
+    """每屏只要正文：非正文行不上屏（B 口径）。"""
+
+    def setUp(self):
+        self.pages = BB.build_pages(
+            BB.parse_004(load("brief_004.txt")),
+            BB.parse_003(load("brief_003.txt")),
+            BB.parse_007(load("brief_007_pushplus.py"), load("brief_007_readme.md")),
+        )
+
+    def test_p2_noise_gone_body_kept(self):
+        p2 = [ln for _, ln in self.pages[2]["rows"]]
+        joined = "\n".join(p2)
+        for noise in (
+            "#1", "#2", "DIR ▸", "字幕已读取", "AI 多空概率", "仅供参考，不做推荐",
+            "C:\\", "SCAN_ERROR", "FRESHNESS CHECK", "超时 / 无法验证", "Too Many Requests",
+            "█", "░", "· 权重",
+        ):
+            self.assertNotIn(noise, joined)
+        for body in (
+            "多 64% / 空 36%", "多 47% / 空 53%",
+            "> 港股午後跌幅收窄 恒指重上18000點 內房板塊反彈",
+            "> 美聯儲議息紀錄顯示官員分歧擴大",
+            "偏多：反弹 / 內房 / 恒指", "中性：分歧 / 利率路径",
+            "00:00 開場", "大家好，今日大市焦點係恒指重返萬八關。",
+            "03:12 內房股集體反彈，碧桂園升幅領先。",
+            "接近上轨极度贪婪时考虑分批止盈", "触及下轨极度恐慌时寻找左侧买点",
+        ):
+            self.assertIn(body, p2)
+
+    def test_p1_legend_gone(self):
+        p1 = [ln for _, ln in self.pages[1]["rows"]]
+        self.assertFalse(any(ln.startswith("<12") for ln in p1))
+        self.assertTrue(any("CBOE VIX 19.30" in ln for ln in p1))
+        self.assertTrue(any(ln.startswith("今日判读") for ln in p1))
+        self.assertTrue(any(ln.startswith("港股盘面") for ln in p1))
+        self.assertTrue(any(ln.startswith("⚠️ 风险提示") for ln in p1))
+
+    def test_body_only_rows_keeps_heads(self):
+        rows = [("head", "机会点"), ("small", "DIR ▸ 信報財經新聞"), ("small", "多 64% / 空 36% · 权重 64%")]
+        out = BB.body_only_rows(rows)
+        self.assertEqual(out, [("head", "机会点"), ("small", "多 64% / 空 36%")])
 
 
 class TestRender(unittest.TestCase):
