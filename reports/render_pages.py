@@ -4,8 +4,7 @@
 render_pages.py —— 把「五页简报 2026-11-15」（仓库 004 / 003 / 007 提取稿）
 渲染成 5 张 400×300 墨水屏页面（1-bit PNG），供极趣墨水屏看板预览。
 
-正文一律为仓库原文（不加说明注释）；版式复用 board_core 的字体与画布约定
-（顶栏黑条 + 副标题 + 正文 + 页脚口径行）。放不下时如实截断并写明
+正文一律为仓库原文（不加说明注释）；版式复用 brief_board.render_page（与常驻看板同一套 400×300 排版引擎）。放不下时如实截断并写明
 「▼ 另有 N 项 · 全文见五页简报」，完整原文见 reports/five-page-brief-2026-11-15.md。
 
 用法（仓库根目录）：
@@ -17,29 +16,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from PIL import ImageDraw  # noqa: E402
-
-from board_core import (  # noqa: E402
-    CANVAS_W,
-    font_bar,
-    font_bar_num,
-    font_foot,
-    font_head,
-    font_sub,
-    font_tiny,
-    font_value,
-    font_value_s,
-    new_canvas,
-    wrap_text_by_pixels,
-)
+import brief_board  # noqa: E402  —— 统一排版引擎（400×300 1-bit 页面渲染）
 
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pages")
-MARGIN_X = 9
-CONTENT_W = CANVAS_W - MARGIN_X * 2
-BODY_TOP = 62
-BODY_BOTTOM = 272
-FOOTER_Y = 277
-FOOTER_NOTE = "数字与正文同源 · 非投资建议"
 
 TITLE = "章鱼 AI·全景分析"
 
@@ -138,65 +117,14 @@ PAGES = {
 }
 
 
-def fit(draw, text, font, max_w):
-    if draw.textlength(text, font=font) <= max_w:
-        return text
-    mark = draw.textlength("…", font=font)
-    out = ""
-    for ch in text:
-        if draw.textlength(out + ch, font=font) > max_w - mark:
-            break
-        out += ch
-    return out + "…"
-
-
 def render(page_id):
     spec = PAGES[page_id]
-    img = new_canvas()
-    draw = ImageDraw.Draw(img)
-
-    # 顶栏
-    draw.rounded_rectangle([(MARGIN_X, 6), (CANVAS_W - MARGIN_X - 1, 40)], radius=7, fill=0)
-    num = f"{page_id}/5"
-    num_w = draw.textlength(num, font=font_bar_num)
-    draw.text((MARGIN_X + 8, 13), fit(draw, TITLE, font_bar, CONTENT_W - 24 - num_w), font=font_bar, fill=255)
-    draw.text((CANVAS_W - MARGIN_X - 8 - num_w, 16), num, font=font_bar_num, fill=255)
-
-    # 副标题：左栏目名，右来源
-    tail_w = draw.textlength(spec["tail"], font=font_tiny)
-    draw.text((CANVAS_W - MARGIN_X - tail_w, 46), spec["tail"], font=font_tiny, fill=0)
-    draw.text((MARGIN_X, 45), fit(draw, spec["sub"], font_sub, CONTENT_W - tail_w - 8), font=font_sub, fill=0)
-
-    # 正文：顺序排版，放不下就从该条起整体截断，如实注明
-    y = BODY_TOP
-    dropped = 0
-    for idx, (kind, text) in enumerate(spec["rows"]):
-        font = {"head": font_head, "text": font_value, "small": font_value_s}[kind]
-        line_h = {"head": 17, "text": 15, "small": 13}[kind]
-        gap = 4 if kind == "head" else 0
-        lines = wrap_text_by_pixels(draw, text, font, CONTENT_W)
-        need = len(lines) * line_h + gap
-        if y + need > BODY_BOTTOM - 14:
-            dropped = len(spec["rows"]) - idx
-            break
-        for ln in lines:
-            draw.text((MARGIN_X, y), ln, font=font, fill=0)
-            y += line_h
-        y += gap
-
-    if dropped:
-        note = f"▼ 另有 {dropped} 项 · 全文见五页简报"
-        draw.text((MARGIN_X, BODY_BOTTOM - 2), note, font=font_tiny, fill=0)
-
-    # 页脚
-    draw.line([(MARGIN_X, FOOTER_Y - 3), (CANVAS_W - MARGIN_X, FOOTER_Y - 3)], fill=0, width=1)
-    right_w = draw.textlength(FOOTER_NOTE, font=font_foot)
-    draw.text((CANVAS_W - MARGIN_X - right_w, FOOTER_Y), FOOTER_NOTE, font=font_foot, fill=0)
-    draw.text((MARGIN_X, FOOTER_Y), fit(draw, spec["meta"], font_foot, CONTENT_W - right_w - 10), font=font_foot, fill=0)
-
     os.makedirs(OUT_DIR, exist_ok=True)
     out = os.path.join(OUT_DIR, f"page_{page_id}.png")
-    img.save(out)
+    _, dropped = brief_board.render_page(
+        spec["rows"], page_id, spec["sub"], spec["tail"], spec["meta"],
+        title=TITLE, out_path=out,
+    )
     print(f"✅ {out}" + (f"（▼ 另有 {dropped} 项）" if dropped else ""))
     return out
 

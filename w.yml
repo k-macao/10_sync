@@ -1,15 +1,15 @@
 # 章鱼 AI·全景分析 看板（极趣墨水屏 5 页）— GitHub Actions 工作流
 #
-# 默认行为（schedule 定时触发，零人工干预）：
-#   定时：每天两次（UTC 00:00 / 12:00 = 北京时间 08:00 / 20:00），对齐仓库 02 的更新节奏
-#   ① 拉取「仓库 02 · 章鱼 AI · 打氧日报」的当日推送页 output/latest.html
-#      （raw.githubusercontent.com 优先，失败自动切 GitHub Contents API）
-#   ② 解析成 5 页：速查卡 / 今日预判 / AI 全篇速览（上）/ AI 全篇速览（下）/ 时间节点
+# 默认行为（schedule 定时触发，零人工干预，mode=brief 常驻看板）：
+#   定时：每天两次（UTC 00:00 / 12:00 = 北京时间 08:00 / 20:00）
+#   ① 拉取 004 每日简报（k-macao.github.io/004）+ 003 机会点/风险点（push.preview.html）
+#      + 007 研报简报（pushplus_deepseek.py 源码提取 BofA 读数与原文文案）
+#   ② 解析成 5 页：004 原文 / 机会点·风险点原文 / 机会节点一行一项 / 007 简报 / 风险点提示原文
 #   ③ 新鲜度校验（默认 36 小时）+ 排版预算（放不下的如实披露条数）
 #   ④ 推送 5 页 400×300 1-bit 图到 Zectrix 墨水屏
-#   ⑤ 记下内容指纹；下一轮内容没变就跳过推送（墨水屏每推一次闪一次，别刷屏）
+#   mode=octopus/news/both 仍走原打氧日报 / 新闻简报管线（main.py，含内容指纹去重）。
 #
-# 失败即显红、整轮不推：仓库 02 拉不到 / 过期 / HTML 改版 / 推送失败，
+# 失败即显红、整轮不推：004/003/007 拉不到 / 过期 / 标记缺失 / 推送失败，
 # 一律退出码 1 —— Actions 变红告警，墨水屏保留上一次的内容，不会被覆盖成空白或残缺内容。
 name: 章鱼 AI·全景分析 看板
 
@@ -19,11 +19,12 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: '看板模式：octopus=调用仓库02日报（默认）/ news=财新+东财 / both=都推'
+        description: '看板模式：brief=常驻看板 004/003/007 五页简报（默认）/ octopus=调用仓库02日报 / news=财新+东财 / both=octopus+news'
         required: false
-        default: 'octopus'
+        default: 'brief'
         type: choice
         options:
+          - brief
           - octopus
           - news
           - both
@@ -38,7 +39,7 @@ on:
         default: ''
         type: string
       max_age_hours:
-        description: '日报新鲜度上限（小时）；超过就整轮跳过并报错'
+        description: '内容新鲜度上限（小时）；超过就整轮跳过并报错（brief 校验 004 生成时间）'
         required: false
         default: '36'
         type: string
@@ -92,7 +93,7 @@ jobs:
           restore-keys: |
             octopus-state-
 
-      - name: 生成并推送（调用仓库 02 的打氧日报推送页 → 墨水屏 5 页）
+      - name: 生成并推送（brief=常驻看板 004/003/007 五页简报；octopus/news=仓库 02 打氧日报）
         env:
           ZECTRIX_API_KEY: ${{ secrets.ZECTRIX_API_KEY }}
           ZECTRIX_MAC: ${{ secrets.ZECTRIX_MAC }}
@@ -101,7 +102,7 @@ jobs:
           OCTOPUS_REPO: ${{ vars.OCTOPUS_REPO || 'k-macao/02' }}
           OCTOPUS_PATH: ${{ vars.OCTOPUS_PATH || 'output/latest.html' }}
         run: |
-          MODE="${{ inputs.mode || 'octopus' }}"
+          MODE="${{ inputs.mode || 'brief' }}"
           PAGES="${{ inputs.pages || '1,2,3,4,5' }}"
           TITLE="${{ inputs.custom_title }}"
           AGE="${{ inputs.max_age_hours || '36' }}"
@@ -120,21 +121,34 @@ jobs:
           echo " dry_run:  $DRY"
           echo "=========================================="
 
-          # 数组拼参数，避免标题含空格/· 时被 shell 拆分
-          ARGS=(--mode "$MODE" --pages "$PAGES" --max-age-hours "$AGE")
-          if [ -n "$TITLE" ]; then
-            ARGS+=(--title "$TITLE")
+          if [ "$MODE" = "brief" ]; then
+            # 常驻看板：004/003/007 五页简报（brief_board.py）
+            ARGS=(--pages "$PAGES" --max-age-hours "$AGE")
+            if [ -n "$TITLE" ]; then
+              ARGS+=(--title "$TITLE")
+            fi
+            if [ "$DRY" = true ]; then
+              ARGS+=(--dry-run)
+            fi
+            echo "执行: python3 brief_board.py ${ARGS[*]}"
+            # 退出码非 0 = 整轮失败：Actions 显红告警，墨水屏保留上一次内容
+            python3 brief_board.py "${ARGS[@]}"
+          else
+            # 数组拼参数，避免标题含空格/· 时被 shell 拆分
+            ARGS=(--mode "$MODE" --pages "$PAGES" --max-age-hours "$AGE")
+            if [ -n "$TITLE" ]; then
+              ARGS+=(--title "$TITLE")
+            fi
+            if [ "$FORCE" = true ]; then
+              ARGS+=(--force)
+            fi
+            if [ "$DRY" = true ]; then
+              ARGS+=(--dry-run)
+            fi
+            echo "执行: python3 main.py ${ARGS[*]}"
+            # 退出码非 0 = 整轮失败：Actions 显红告警，墨水屏保留上一次内容
+            python3 main.py "${ARGS[@]}"
           fi
-          if [ "$FORCE" = true ]; then
-            ARGS+=(--force)
-          fi
-          if [ "$DRY" = true ]; then
-            ARGS+=(--dry-run)
-          fi
-
-          echo "执行: python3 main.py ${ARGS[*]}"
-          # 退出码非 0 = 整轮失败：Actions 显红告警，墨水屏保留上一次内容
-          python3 main.py "${ARGS[@]}"
 
       - name: 记下本次推送的内容指纹
         if: success() && hashFiles('.octopus/state.json') != ''

@@ -2,8 +2,10 @@
 
 **⏱️ 5分钟复刻，专属桌面财经资讯看板。**
 
-本项目为极趣墨水屏 (Zectrix) 打造，五页顶栏统一显示 **章鱼 AI·全景分析**，
-正文 = **调用「仓库 02 · 章鱼 AI · 打氧日报」的当日推送页**，自动抓取、自动排版、自动推屏。
+本项目为极趣墨水屏 (Zectrix) 打造，五页顶栏统一显示 **章鱼 AI·全景分析**，自动抓取、自动排版、自动推屏。
+
+**默认内容 = 常驻看板「004/003/007 五页简报」**（每天两次自动更新，见下节）；
+打氧日报 / 新闻简报仍可随时用 `--mode octopus` / `--mode news` 切回。
 
 <img src="./images/preview.jpg" width="60%">
 
@@ -13,7 +15,34 @@
 
 ---
 
-## 📌 看板显示内容
+## 🧾 常驻看板：004/003/007 五页简报（mode=brief，默认）
+
+定时任务每天两次（UTC 00:00 / 12:00 = 北京时间 08:00 / 20:00）拉取三处公开来源，
+解析成 5 页**纯原文**简报（不加说明注释）推上墨水屏，`brief_board.py` 全权负责：
+
+| 页 | 内容（一律原文） | 来源 |
+|---|---|---|
+| 1 | `00 / 每日 VIX 恐慌指数`（VIX / 今日判读 / 恒指涨跌幅）+ `07 / 核心结论` 全文 | [004 每日简报](https://k-macao.github.io/004/) |
+| 2 | 机会点 / 风险点（含多空概率、各行出处、SCAN_ERROR、FRESHNESS） | [003 push.preview.html](https://github.com/k-macao/003/blob/main/push.preview.html) |
+| 3 | 机会节点，一行一个（含时段要点） | 004 + 003 |
+| 4 | 📊 美银牛熊指标（BofA Bull & Bear）读数 / 分项 + 简报固定章节顺序 | [007 pushplus_deepseek.py](https://github.com/k-macao/007/blob/main/pushplus_deepseek.py) |
+| 5 | ⚠️ 研报 AI 风险点提示 全文（口径 / 关键词 / prompt / 兜底段落 / 尾注） | [007 README](https://github.com/k-macao/007/blob/main/README.md) |
+
+```bash
+python3 brief_board.py --dry-run               # 预览五页（真实拉 004/003/007，不推送）
+python3 brief_board.py --pages 1,2 --dry-run   # 只看前两页
+python3 brief_board.py --max-age-hours 0       # 关闭 004 新鲜度校验（默认 48 小时）
+```
+
+> ✅ 004/003/007 拉不到 / 过期 / 标记缺失 → 退出码 1，Actions 显红，墨水屏保留上一次内容。
+> ✅ 顶栏依旧只有 **章鱼 AI·全景分析** + 页码；页脚口径 `数字与正文同源 · 非投资建议`。
+> ✅ BofA 读数与风险提示文案**直接从 007 源码 / README 提取**（不是写死的），007 更新即跟上；
+>    读数超 10 天自动标「⏳ 已过期」。
+> ✅ 手动触发（Actions → Run workflow）时 `mode` 选 `brief` 即常驻看板，`octopus`/`news`/`both` 走旧管线。
+
+---
+
+## 📌 看板显示内容（打氧日报模式 mode=octopus）
 
 适配 400×300 分辨率，共 5 页（**顶栏五页统一**，正文互不重复）：
 
@@ -43,7 +72,7 @@ python3 main.py --pages 1,2,3,4 --dry-run            # 只要前四页（不推�
 > （`日报更新时间 · 当天源 N/M · 数字与正文同源 · 非投资建议`）。
 > ✅ **放不下就如实说**：被版面截断的条目加「…」，整条没上屏的写「▼ 另有 N 项 · 全文见微信打氧日报」——
 > 绝不悄悄少给，也不用旧内容顶替。
-> 默认：`--mode octopus`（调用仓库 02）。
+> 默认：`--mode brief`（常驻看板 004/003/007 五页简报）；`--mode octopus` 调用仓库 02 打氧日报。
 
 ### 顶栏想改？
 
