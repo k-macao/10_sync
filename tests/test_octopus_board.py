@@ -267,7 +267,9 @@ class TestLimeLayout(unittest.TestCase):
         渲染出来的每一条都必须能在日报原文里找到 —— 不编、不自己算一套。
 
         「新手小抄」是把日报的 ①②③ 三句话按原样拼成一行（`_newbie_line`），
-        所以核对前先把 ①/②/③ 这些小标号剥掉，剩下的话照样得逐字来自原文。
+        而「只正名、不换算」会把明确无歧义的 `亿`/`亿元` 补全成 `亿港元`/`亿人民币`
+        （不改任何数值）。所以核对前先把 ①/②/③ 标号剥掉，并允许 `亿(?:港元|人民币)`
+        对应原文的 `亿`/`亿元`，其余数字和文字照样得逐字来自原文。
         """
         # 去掉标签与空白，只留正文（「上证 3,813.79 ▲ +0.05%」这种跨标签的句子才对得上）
         flat = re.sub(r"\s+", "", re.sub(r"<[^>]*>", "", self.html))
@@ -279,7 +281,15 @@ class TestLimeLayout(unittest.TestCase):
                 for part in re.split(r"[；·]| ｜ ", value):
                     part = re.sub(r"\s+", "", part)
                     if len(part) >= 10:
-                        self.assertIn(part[:16], flat, f"Page {pid} 出现了日报里没有的内容：{part[:30]}")
+                        sample = part[:16]
+                        if sample in flat:
+                            continue
+                        pat = re.escape(sample)
+                        pat = re.sub(r"亿(?:港元|人民币)", r"亿(?:元|港元|人民币)?", pat)
+                        self.assertRegex(
+                            flat, pat,
+                            f"Page {pid} 出现了日报里没有的内容：{part[:30]}",
+                        )
         # 第 5 页是把表格行合并成整句（时刻 + 国家 + 名称 + 月份），所以要按行核对
         # 「时间 / 名称逐字来自原文」，跟老版式的 `test_every_rendered_row_is_in_source_html` 一个口径。
         for row in R._calendar_rows(self.report.sections["10 · ECON CALENDAR"]):
@@ -403,12 +413,13 @@ class TestBuildPages(unittest.TestCase):
         pages = R.build_pages(R.parse_report(trimmed))
         for pid in (1, 2, 3, 4, 5):
             self.assertTrue(pages[pid]["items"], f"Page {pid} 空了")
-        # 退化时补的内容必须来自真实日报，不能凭空造
+        # 退化时补的内容必须来自真实日报，不能凭空造（只正名不换算，且不篡改原 Section.items）
         card = R.parse_report(trimmed).section("00 · SHORT CARD")
-        real = {i.value for i in card.items if i.value}
+        real = {R.clarify_currency_units(i.value, label=i.label) for i in card.items if i.value}
         for pid in (2, 3, 4):
             for item in pages[pid]["items"]:
                 self.assertIn(item.value, real)
+        self.assertIn("南向 699 亿（温和缩量）", card.find("水位").value)
 
 
 # =====================================================================
@@ -615,6 +626,94 @@ class TestNormalizeLabel(unittest.TestCase):
     def test_keeps_content(self):
         self.assertEqual(R.normalize_label("恒生指数"), "恒生指数")
         self.assertEqual(R.normalize_label("P(周涨)"), "P(周涨)")
+
+
+# =====================================================================
+# 币种正名（只正名、不换算）
+# =====================================================================
+class TestCurrencyClarification(unittest.TestCase):
+    def test_hkd_unambiguous_clauses_and_labels(self):
+        cases = [
+            ("44/100 流动性偏紧 · 南向 789 亿（温和缩量）", "💧 水位",
+             "44/100 流动性偏紧 · 南向 789 亿港元（温和缩量）"),
+            ("南向成交 699 亿元 · 温和缩量", "",
+             "南向成交 699 亿港元 · 温和缩量"),
+            ("南向成交总额（2026-10-09）789.41亿元", "",
+             "南向成交总额（2026-10-09）789.41亿港元"),
+            ("依据：南向859.2亿，资金因子+0.79", "",
+             "依据：南向859.2亿港元，资金因子+0.79"),
+            ("11月13日港股通净买入23.33亿", "",
+             "11月13日港股通净买入23.33亿港元"),
+            ("恒指成交额 1,741 亿", "",
+             "恒指成交额 1,741 亿港元"),
+            ("恒指 23,637.60 · 成交 1,741 亿", "港股",
+             "恒指 23,637.60 · 成交 1,741 亿港元"),
+            ("691 亿 · 环比 -19.6%", "南向（港股通）",
+             "691 亿港元 · 环比 -19.6%"),
+        ]
+        for raw, label, want in cases:
+            got = R.clarify_currency_units(raw, label=label)
+            self.assertEqual(got, want)
+            self.assertEqual(R.clarify_currency_units(got, label=label), want)
+
+    def test_rmb_unambiguous_clauses_and_labels(self):
+        cases = [
+            ("上证 3,813.79 ▲ +0.05% · 成交 19168.82亿 ▲ +13.12%", "A股",
+             "上证 3,813.79 ▲ +0.05% · 成交 19168.82亿人民币 ▲ +13.12%"),
+            ("19168.82亿 较上一交易日 ▲ 涨 +13.12%", "沪深京成交额合计",
+             "19168.82亿人民币 较上一交易日 ▲ 涨 +13.12%"),
+            ("北向成交总额（2026-10-09）2,967.35亿元", "",
+             "北向成交总额（2026-10-09）2,967.35亿人民币"),
+            ("两市成交 1.92万亿", "",
+             "两市成交 1.92万亿人民币"),
+        ]
+        for raw, label, want in cases:
+            got = R.clarify_currency_units(raw, label=label)
+            self.assertEqual(got, want)
+            self.assertEqual(R.clarify_currency_units(got, label=label), want)
+
+    def test_already_explicit_or_ambiguous_untouched(self):
+        unchanged = [
+            ("11月13日港股通净买入23.33亿港元", ""),
+            ("英伟达跌破4万亿美元", ""),
+            ("韩国资金抢筹中际旭创！H股上市7天净买4339万美元", ""),
+            ("江波龙：半年度净利润105.77亿元", ""),
+            ("央行公开市场净投放3000亿元", ""),
+            ("南向 699 亿人民币", ""),
+            ("南向 699 亿元人民币", ""),
+            ("南向 699 亿（港元）", ""),
+            ("现货黄金 3,886（+0.03%）", ""),
+        ]
+        for raw, label in unchanged:
+            self.assertEqual(R.clarify_currency_units(raw, label=label), raw)
+
+    def test_build_pages_clarifies_both_fixtures(self):
+        for loader in (load_fixture, load_fixture_lime):
+            pages = R.build_pages(R.parse_report(loader()))
+            p1 = "".join(it.value for it in pages[1]["items"])
+            p2 = "".join(it.value for it in pages[2]["items"])
+            p3 = "".join(it.value for it in pages[3]["items"])
+            self.assertIn("亿港元", p1)
+            self.assertIn("亿人民币", p2)
+            self.assertIn("亿港元", p3)
+            self.assertNotIn("亿港元港元", p1 + p3)
+            self.assertNotIn("亿人民币人民币", p2)
+        lime_pages = R.build_pages(R.parse_report(load_fixture_lime()))
+        p4 = "".join(it.value for it in lime_pages[4]["items"])
+        self.assertIn("19168.82亿人民币", p4)
+
+    def test_main_dedupe_titles_clarifies_unambiguous_only(self):
+        import main
+        got = main.dedupe_titles([
+            "南向成交今日达789亿元",
+            "韩国资金抢筹中际旭创！H股上市7天净买4339万美元",
+            "江波龙：半年度净利润105.77亿元",
+        ])
+        self.assertEqual(got, [
+            "南向成交今日达789亿港元",
+            "韩国资金抢筹中际旭创！H股上市7天净买4339万美元",
+            "江波龙：半年度净利润105.77亿元",
+        ])
 
 
 # =====================================================================

@@ -253,6 +253,19 @@ class TestBodyFilter(unittest.TestCase):
         out = BB.body_only_rows(rows)
         self.assertEqual(out, [("head", "机会点"), ("small", "多 64% / 空 36%")])
 
+    def test_body_only_rows_clarifies_unambiguous_currencies(self):
+        rows = [
+            ("small", "南向成交 691 亿元 · 沪深京成交额合计 14943.26亿"),
+            ("small", "英伟达跌破4万亿美元 · 11月13日港股通净买入23.33亿港元"),
+            ("small", "现货黄金 3,886（+0.03%）"),
+        ]
+        out = BB.body_only_rows(rows)
+        self.assertEqual(out, [
+            ("small", "南向成交 691 亿港元 · 沪深京成交额合计 14943.26亿人民币"),
+            ("small", "英伟达跌破4万亿美元 · 11月13日港股通净买入23.33亿港元"),
+            ("small", "现货黄金 3,886（+0.03%）"),
+        ])
+
 
 class TestRender(unittest.TestCase):
     def test_render_page_size_and_overflow(self):

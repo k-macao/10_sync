@@ -241,6 +241,66 @@ def normalize_label(text):
     return _LABEL_LEAD.sub("", (text or "").strip()).strip()
 
 
+# 只正名、不换算：在不改动数值与原生计价币种的前提下，
+# 为南向/港股（港元）和 A股/北向（人民币）等无歧义条目补全缺失的币种单位。
+_CURRENCY_AFTER_RE = re.compile(
+    r"^\s*(?:港元|港币|人民币|美元|日元|欧元|英镑|台币|新台币|澳元|加元|瑞郎|韩元|元|"
+    r"HKD|RMB|CNY|USD|[（(]\s*(?:港元|港币|人民币|美元|HKD|RMB|CNY|USD))"
+)
+_NUM_YI = r"[+-]?[\d,]+(?:\.\d+)?(?:[-~～]\s*[\d,]+(?:\.\d+)?)?\s*(?:万)?"
+_OPT_DATE = r"(?:（[^）]{1,20}）)?"
+_OPT_TIME = r"(?:今日|昨日|当日)?"
+_OPT_VERB = r"(?:今日|昨日|当日|目前)?(?:已)?(?:达|突破|破|超过|超|约|近)?"
+_HKD_INLINE_RE = re.compile(
+    rf"((?:南向(?:（港股通）)?{_OPT_TIME}(?:成交(?:额|总额)?|资金|净买入|净卖出|净流入|净流出)?"
+    rf"|港股通(?:（[^）]*）)?{_OPT_TIME}(?:成交(?:额|总额)?|净买入|净卖出|净流入|净流出)?"
+    rf"|恒指成交(?:额)?|港股(?:大盘|主板)?成交(?:额)?)"
+    rf"{_OPT_DATE}{_OPT_VERB}[：:\s]*{_NUM_YI})(亿(?:元)?)"
+)
+_RMB_INLINE_RE = re.compile(
+    rf"((?:北向(?:（陆股通）)?{_OPT_TIME}(?:成交(?:额|总额)?|资金|净买入|净卖出|净流入|净流出)?"
+    rf"|陆股通(?:（[^）]*）)?{_OPT_TIME}(?:成交(?:额|总额)?|净买入|净卖出|净流入|净流出)?"
+    rf"|沪深京成交(?:额(?:合计)?)?|沪深成交(?:额(?:合计)?)?|两市成交(?:额(?:合计)?)?"
+    rf"|A股成交(?:额)?|上证成交(?:额)?|深证成交(?:额)?)"
+    rf"{_OPT_DATE}{_OPT_VERB}[：:\s]*{_NUM_YI})(亿(?:元)?)"
+)
+_TURNOVER_YI_RE = re.compile(rf"(成交(?:额(?:合计)?)?[：:\s]*{_NUM_YI})(亿(?:元)?)")
+_BARE_YI_RE = re.compile(rf"(?<![\d.])({_NUM_YI})(亿(?:元)?)")
+
+_HKD_LABELS = {"港股", "恒指成交额", "港股成交额", "南向", "南向（港股通）", "港股通"}
+_HKD_FLOW_LABELS = {"恒指成交额", "港股成交额", "南向", "南向（港股通）", "港股通"}
+_RMB_LABELS = {"A股", "沪深京成交额合计", "沪深京成交额", "沪深成交额", "两市成交额", "北向", "北向（陆股通）", "陆股通"}
+_RMB_FLOW_LABELS = {"沪深京成交额合计", "沪深京成交额", "沪深成交额", "两市成交额", "北向", "北向（陆股通）", "陆股通"}
+
+
+def _append_currency(pattern, text, currency):
+    def _sub(m):
+        tail = text[m.end():]
+        if _CURRENCY_AFTER_RE.match(tail):
+            return m.group(0)
+        return f"{m.group(1)}亿{currency}"
+
+    return pattern.sub(_sub, text)
+
+
+def clarify_currency_units(text, label=""):
+    """只正名、不换算：补全明确无歧义的港元/人民币单位，不修改任何数值。"""
+    if not text or "亿" not in text:
+        return text
+    out = _append_currency(_HKD_INLINE_RE, text, "港元")
+    out = _append_currency(_RMB_INLINE_RE, out, "人民币")
+    clean_label = normalize_label(label)
+    if clean_label in _HKD_LABELS:
+        out = _append_currency(_TURNOVER_YI_RE, out, "港元")
+    if clean_label in _HKD_FLOW_LABELS:
+        out = _append_currency(_BARE_YI_RE, out, "港元")
+    if clean_label in _RMB_LABELS:
+        out = _append_currency(_TURNOVER_YI_RE, out, "人民币")
+    if clean_label in _RMB_FLOW_LABELS:
+        out = _append_currency(_BARE_YI_RE, out, "人民币")
+    return out
+
+
 class Section:
     # node = 这个栏目的 DOM 节点。正文条目已被拍平（表格也变成一行行文字），
     # 财经日历要靠它拿回「表格里哪一行属于哪一天」这种结构信息。
@@ -1186,6 +1246,15 @@ def build_pages(report, fallback_from_disk=False):
         raise ReportUnavailable(
             f"日报 5 页里有 {len(empty)} 页解析不出内容（{empty}）→ 整轮跳过、保留墨水屏原有内容"
         )
+
+    # 只正名、不换算：在不改变原文数字与原生计价币种的前提下，
+    # 为南向/港股（港元）与 A股/北向（人民币）等无歧义条目补全缺失币种。
+    for page in pages.values():
+        page["items"] = [
+            Item(it.label, clarify_currency_units(it.value, label=it.label), kind=it.kind)
+            if it.value else it
+            for it in page["items"]
+        ]
     return pages
 
 

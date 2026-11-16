@@ -10,12 +10,15 @@ board_core —— 墨水屏看板的公共底层（两块看板共用）
     wrap_text_by_pixels()      按像素宽度折行
     make_page_header()         顶栏文案（五页统一）
     draw_top_bar() / fit_text() / spread_leading()   400×300 共用版面骨架
+    clarify_currency_units()   只正名、不换算（补全明确无歧义的港元/人民币单位）
     set_enabled_pages() / set_board_title()   供 main.py 的命令行覆盖调用
 """
 
 import os
 import requests
 from PIL import Image, ImageFont
+
+from octopus_report import clarify_currency_units
 
 # =====================================================================
 # 🔒 核心密钥区（⚠️ 绝对不要写死在代码里，请在 GitHub Secrets 里配置）

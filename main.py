@@ -11,6 +11,7 @@ import board_core
 from board_core import (
     API_KEY, MAC_ADDRESS,
     CANVAS_W, CONTENT_W, MARGIN_X,
+    clarify_currency_units,
     draw_top_bar, get_font,
     font_small,
     make_page_header, push_image, set_board_title, set_enabled_pages,
@@ -525,7 +526,7 @@ def dedupe_titles(titles, exclude=None):
     seen = set()
     out = []
     for t in titles:
-        t = (t or "").strip()
+        t = clarify_currency_units((t or "").strip())
         if not t or t in seen or t in exclude:
             continue
         seen.add(t)
