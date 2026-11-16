@@ -42,6 +42,7 @@ from board_core import (
     CONTENT_W,
     FONT_PATH,
     MARGIN_X,
+    clarify_currency_units,
     draw_top_bar,
     font_tiny,
     new_canvas,
@@ -393,7 +394,7 @@ def _body_line(text):
 
 
 def body_only_rows(rows):
-    """(kind, 原文行) 列表 → 只留正文的 rows（head 小标题原样保留）。"""
+    """(kind, 原文行) 列表 → 只留正文的 rows（head 小标题原样保留，仅正名补全币种）。"""
     out = []
     for kind, t in rows:
         if kind == "head":
@@ -401,7 +402,7 @@ def body_only_rows(rows):
             continue
         line = _body_line(t)
         if line is not None:
-            out.append((kind, line))
+            out.append((kind, clarify_currency_units(line)))
     return out
 
 
