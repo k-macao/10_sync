@@ -1,0 +1,6 @@
+var hq_str_int_hangseng="恒生指数,23655.20,-352.35,-1.47";
+var hq_str_int_nikkei="日经指数,61120.80,301.44,0.50";
+var hq_str_int_kospi="首尔综合指数,5292.10,-50.63,-0.95";
+var hq_str_int_dji="道琼斯,52360.10,63.01,0.12";
+var hq_str_int_nasdaq="纳斯达克,25120.44,-245.65,-0.97";
+var hq_str_int_sp500="标普500,7563.20,-29.20,-0.38";

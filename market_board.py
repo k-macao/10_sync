@@ -12,13 +12,13 @@ market_board —— 五页全球行情数据面板渲染与 Zectrix 墨水屏推
 
 每条指数同时展示三层「变化」：
     1. 日内涨跌：涨跌额（▲+50.46 / ▼-370.95）+ 涨跌幅胶囊（黑底白字=涨，白底黑框=跌）
-    2. 分时变化：1分 +14.80 / -18.50（较上一轮同交易日行情的点位变化；首轮无前值显示 --）
+    2. 分时变化：5分 +14.80 / -18.50（较上一轮抓取的点位变化，默认 5 分钟一轮；首轮无前值显示 --）
     3. 日内区间：今开 / 最高 / 最低 / 振幅 + 低—高位置条（页脚附总成交及较上轮增量）
 
 按页指纹去重推送：
     · 每页独立计算 1-bit 位图 SHA-256，与状态文件比对；休市或行情未变的页不推屏（零多余闪屏）
     · 某页有效行情为 0 时跳过该页推送，保留墨水屏上一版内容（绝不推空屏覆盖）
-    · 单页推送失败时不更新该页指纹，下一分钟自动重试
+    · 单页推送失败时不更新该页指纹，下一轮自动重试
 
 退出码：
     0  成功（已推送有变化的页，或全部无变化）
@@ -80,7 +80,28 @@ DEFAULT_STATE_FILE = os.environ.get(
     os.path.join(".octopus", "market_state.json"),
 )
 DEFAULT_BOARD_TITLE = "章鱼 AI·全景分析"
-DEFAULT_UPDATE_TAG = "1分钟更新"
+
+# 更新节奏：默认 5 分钟一轮（抓取 → 渲染 → 推屏）。分时变化与页脚标签都跟着这个间隔走，
+# 由 market_loop.py 通过 --interval 传给每轮渲染，所以改成 1 分钟/15 分钟也不会出现「1分」错标。
+DEFAULT_INTERVAL_SECONDS = 300
+DEFAULT_DELTA_TAG = "5分"
+DEFAULT_UPDATE_TAG = "5分钟更新"
+
+
+def interval_minutes(interval_seconds: Optional[float] = None) -> int:
+    """把间隔秒数折算成分钟数（最小 1），用于「N分」与「N分钟更新」文案。"""
+    secs = DEFAULT_INTERVAL_SECONDS if interval_seconds is None else float(interval_seconds)
+    return max(1, int(round(secs / 60.0)))
+
+
+def delta_label(interval_seconds: Optional[float] = None) -> str:
+    """分时变化前缀，如「5分」/「1分」/「15分」。"""
+    return f"{interval_minutes(interval_seconds)}分"
+
+
+def update_label(interval_seconds: Optional[float] = None) -> str:
+    """页脚更新标签，如「5分钟更新」/「1分钟更新」。"""
+    return f"{interval_minutes(interval_seconds)}分钟更新"
 
 # 退出码约定（供 market_loop.py 识别）
 EXIT_OK = 0
@@ -302,14 +323,14 @@ def _change_with_arrow(q: Quote) -> str:
     return f"{arr}{body}" if arr else body
 
 
-def _delta_short(q: Quote, with_pct: bool = False) -> str:
+def _delta_short(q: Quote, with_pct: bool = False, tag: str = DEFAULT_DELTA_TAG) -> str:
     if not q.valid or q.delta is None:
-        return f"1分 {EMPTY_TEXT}"
+        return f"{tag} {EMPTY_TEXT}"
     d = fmt_signed(q.delta, decimals=2)
     if with_pct and q.delta_pct is not None:
         dp = fmt_signed(q.delta_pct, decimals=2, suffix="%")
-        return f"1分 {d} ({dp})"
-    return f"1分 {d}"
+        return f"{tag} {d} ({dp})"
+    return f"{tag} {d}"
 
 
 def _status_tag(q: Quote) -> str:
@@ -388,7 +409,9 @@ def _draw_footer(cv: Canvas, page: MarketPageData, update_tag: str = DEFAULT_UPD
     cv.text(LEFT + 2, FOOTER_TEXT_Y, _footer_left(page), 12, fill=0, max_w=avail_l)
 
 
-def _draw_compact_rows(cv: Canvas, page: MarketPageData) -> None:
+def _draw_compact_rows(
+    cv: Canvas, page: MarketPageData, tag: str = DEFAULT_DELTA_TAG
+) -> None:
     """5 行高密双行卡片（Page 1 · A股：上证 / 深成 / 创业板 / 沪深300 / 科创50）。"""
     rows = page.rows
     n = len(rows)
@@ -414,7 +437,7 @@ def _draw_compact_rows(cv: Canvas, page: MarketPageData) -> None:
             fmt_pct(q.pct), q.direction, px=13,
         )
 
-        # 第 2 行：1分变化 | 高/低（固定列对齐） | 成交额（明确人民币）
+        # 第 2 行：分时变化（默认 5分）| 高/低（固定列对齐） | 成交额（明确人民币）
         sub_y = y0 + 25
         amt_txt = (
             f"额 {fmt_cn_amount(q.turnover, currency)}"
@@ -423,7 +446,7 @@ def _draw_compact_rows(cv: Canvas, page: MarketPageData) -> None:
         )
         ab = cv.text(RIGHT - 2, sub_y, amt_txt, 12, max_w=125, align="right")
 
-        d_txt = _delta_short(q, with_pct=False)
+        d_txt = _delta_short(q, with_pct=False, tag=tag)
         db = cv.text(name_x, sub_y, d_txt, 12, max_w=90)
 
         hl_x = max(hl_col_x, db[2] + 8)
@@ -441,7 +464,9 @@ def _draw_compact_rows(cv: Canvas, page: MarketPageData) -> None:
             cv.dotted_hline(LEFT + 2, RIGHT - 2, sep_y)
 
 
-def _draw_medium_cards(cv: Canvas, page: MarketPageData) -> None:
+def _draw_medium_cards(
+    cv: Canvas, page: MarketPageData, tag: str = DEFAULT_DELTA_TAG
+) -> None:
     """3 行三层卡片（Page 2 · 港股；Page 5 · 美股）。"""
     rows = page.rows
     n = len(rows)
@@ -466,7 +491,7 @@ def _draw_medium_cards(cv: Canvas, page: MarketPageData) -> None:
             fmt_pct(q.pct), q.direction, px=13,
         )
 
-        # 第 2 行：1分变化 + 今开 | 成交股数 + 成交额（或 昨收 + 成交股数）
+        # 第 2 行：分时变化（默认 5分）+ 今开 | 成交股数 + 成交额（或 昨收 + 成交股数）
         mid_y = y0 + 30
         if q.turnover is not None:
             parts = []
@@ -480,11 +505,11 @@ def _draw_medium_cards(cv: Canvas, page: MarketPageData) -> None:
             right_mid = f"昨 {pc_s} · {vol_s}"
         rmb = cv.text(RIGHT - 2, mid_y, right_mid, 12, max_w=208, align="right")
 
-        left_mid = f"{_delta_short(q)} · 开 {fmt_price(q.open)}"
+        left_mid = f"{_delta_short(q, tag=tag)} · 开 {fmt_price(q.open)}"
         l_avail = rmb[0] - name_x - 8
         if l_avail >= 52:
             if cv.width(left_mid, 12) > l_avail:
-                left_mid = _delta_short(q)
+                left_mid = _delta_short(q, tag=tag)
             cv.text(name_x, mid_y, left_mid, 12, max_w=l_avail)
 
         # 第 3 行：低 ├━━●────┤ 高  |  振幅
@@ -508,7 +533,9 @@ def _draw_medium_cards(cv: Canvas, page: MarketPageData) -> None:
             cv.dotted_hline(LEFT + 2, RIGHT - 2, y0 + slot_h - 2)
 
 
-def _draw_hero_cards(cv: Canvas, page: MarketPageData) -> None:
+def _draw_hero_cards(
+    cv: Canvas, page: MarketPageData, tag: str = DEFAULT_DELTA_TAG
+) -> None:
     """2 行大字双卡（Page 3 · 韩股 KOSPI/KOSDAQ；Page 4 · 日股 日经225/东证指数）。"""
     rows = page.rows
     n = len(rows)
@@ -535,7 +562,7 @@ def _draw_hero_cards(cv: Canvas, page: MarketPageData) -> None:
             fmt_pct(q.pct), q.direction, px=15,
         )
 
-        # 第 2 行：日内涨跌额 | 1分钟变化（含百分比） | 日内振幅
+        # 第 2 行：日内涨跌额 | 分时变化（默认 5 分钟，含百分比） | 日内振幅
         chg_y = y0 + 40
         amp_b = cv.text(RIGHT - 2, chg_y + 1, f"振幅 {fmt_amp(q.amplitude)}", 12, align="right")
         cb = cv.text(name_x, chg_y, f"涨跌 {_change_with_arrow(q)}", 13, max_w=135)
@@ -543,9 +570,9 @@ def _draw_hero_cards(cv: Canvas, page: MarketPageData) -> None:
         d_x = cb[2] + 12
         d_avail = amp_b[0] - d_x - 10
         if d_avail >= 55:
-            d_full = _delta_short(q, with_pct=True)
+            d_full = _delta_short(q, with_pct=True, tag=tag)
             if cv.width(d_full, 12) > d_avail:
-                d_full = _delta_short(q, with_pct=False)
+                d_full = _delta_short(q, with_pct=False, tag=tag)
             cv.text(d_x, chg_y + 1, d_full, 12, max_w=d_avail)
 
         # 第 3 行：低 ├━━━━●──────┤ 高
@@ -586,23 +613,30 @@ def render_market_page(
     total_pages: int = 5,
     custom_title: Optional[str] = None,
     demo: bool = False,
-    update_tag: str = DEFAULT_UPDATE_TAG,
+    update_tag: Optional[str] = None,
+    interval_seconds: Optional[float] = None,
     out_path: Optional[str] = None,
     validate: bool = True,
 ) -> Image.Image:
-    """把单个市场页渲染为 400×300 1-bit 图像并通过严格排版预检。"""
+    """把单个市场页渲染为 400×300 1-bit 图像并通过严格排版预检。
+
+    interval_seconds 决定「N分」与「N分钟更新」文案（默认 5 分钟）；update_tag 可显式覆盖页脚文案。
+    """
     cv = Canvas()
     _draw_header(cv, page, total_pages=total_pages, custom_title=custom_title, demo=demo)
 
+    tag = delta_label(interval_seconds)
+    footer_tag = update_tag or update_label(interval_seconds)
+
     n = len(page.rows)
     if n <= 2:
-        _draw_hero_cards(cv, page)
+        _draw_hero_cards(cv, page, tag=tag)
     elif n <= 3:
-        _draw_medium_cards(cv, page)
+        _draw_medium_cards(cv, page, tag=tag)
     else:
-        _draw_compact_rows(cv, page)
+        _draw_compact_rows(cv, page, tag=tag)
 
-    _draw_footer(cv, page, update_tag=update_tag)
+    _draw_footer(cv, page, update_tag=footer_tag)
     if validate:
         cv.validate(page.spec.page_id)
     if out_path:
@@ -616,7 +650,8 @@ def render_all_pages(
     *,
     page_ids: Sequence[int] = (1, 2, 3, 4, 5),
     custom_title: Optional[str] = None,
-    update_tag: str = DEFAULT_UPDATE_TAG,
+    update_tag: Optional[str] = None,
+    interval_seconds: Optional[float] = None,
     out_dir: Optional[str] = None,
     validate: bool = True,
 ) -> Dict[int, Image.Image]:
@@ -633,6 +668,7 @@ def render_all_pages(
             custom_title=custom_title,
             demo=panel.demo,
             update_tag=update_tag,
+            interval_seconds=interval_seconds,
             out_path=out_path,
             validate=validate,
         )
@@ -798,6 +834,7 @@ def run_once(
     state_file: Optional[str] = DEFAULT_STATE_FILE,
     out_dir: Optional[str] = None,
     meta_file: Optional[str] = None,
+    interval_seconds: Optional[float] = None,
     fetcher=None,
     pusher=push_image,
 ) -> CycleResult:
@@ -815,7 +852,7 @@ def run_once(
     if custom_title:
         set_board_title(custom_title)
 
-    # 1. 获取行情并计算每分钟变化
+    # 1. 获取行情（7 路源）并计算较上一轮的变化
     use_demo = bool(demo or demo_delta)
     prev_state = {} if use_demo else load_state(state_file)
     if use_demo:
@@ -859,6 +896,7 @@ def run_once(
                 total_pages=len(panel.pages),
                 custom_title=custom_title,
                 demo=panel.demo,
+                interval_seconds=interval_seconds,
                 out_path=out_path,
                 validate=True,
             )
@@ -932,12 +970,16 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     ap.add_argument("--pages", default="1,2,3,4,5", help="推送页面（默认 1,2,3,4,5 = A,港,韩,日,美）")
     ap.add_argument("--title", default=None, help="自定义顶栏前缀（留空直接显示 A股行情/港股行情/…）")
-    ap.add_argument("--state-file", default=DEFAULT_STATE_FILE, help="每分钟变化与页面指纹状态文件")
+    ap.add_argument("--state-file", default=DEFAULT_STATE_FILE, help="轮间变化与页面指纹状态文件")
     ap.add_argument("--out-dir", default=None, help="PNG 输出目录（默认当前目录 page_1..5.png）")
     ap.add_argument("--meta-file", default=None, help="可选：输出 JSON 行情与状态摘要")
     ap.add_argument("--contact-sheet", default=None, help="可选：输出五页拼版预览图")
     ap.add_argument("--demo", action="store_true", help="离线演示：使用 tests/fixtures/market_* 实测数据")
-    ap.add_argument("--demo-delta", action="store_true", help="离线演示时附带上一分钟基线以展示 1分变化")
+    ap.add_argument("--demo-delta", action="store_true", help="离线演示时附带上一轮基线以展示 5分变化")
+    ap.add_argument(
+        "--interval", type=float, default=DEFAULT_INTERVAL_SECONDS,
+        help=f"更新间隔秒数（默认 {DEFAULT_INTERVAL_SECONDS} = 5 分钟），只影响「N分」「N分钟更新」文案",
+    )
     ap.add_argument("--force", action="store_true", help="画面与上次一致也强制重推")
     ap.add_argument("--dry-run", action="store_true", help="仅渲染本地 PNG，不推送到 Zectrix")
     return ap.parse_args(argv)
@@ -956,6 +998,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         state_file=args.state_file,
         out_dir=args.out_dir,
         meta_file=args.meta_file,
+        interval_seconds=args.interval,
     )
     if args.contact_sheet and res.exit_code == EXIT_OK:
         base = Path(args.out_dir) if args.out_dir else Path(".")

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""1 分钟常驻更新与 GitHub Actions 自动接力（market_loop.py）离线单元测试。"""
+"""5 分钟常驻更新与 GitHub Actions 自动接力（market_loop.py）离线单元测试。"""
 import json
 import os
 import tempfile
@@ -26,7 +26,7 @@ class FakeClock:
 def _relay_cfg(**overrides) -> ml.LoopConfig:
     base = dict(
         pages="1,2,3,4,5",
-        interval=60.0,
+        interval=300.0,
         loop_seconds=420.0,
         relay=True,
         branch="main",
@@ -87,7 +87,7 @@ class TestMarketLoop(unittest.TestCase):
         cfg = ml.LoopConfig(
             interval=60.0, loop_seconds=200.0, force_first=True,
             dry_run=True, board_cmd=["board"],
-        )
+        )  # 这里用 60s 只为在 200s 窗口里压出 3 轮，验证槽位对齐本身
         stats = ml.run_loop(cfg, clock=clock.now, sleep=clock.sleep, runner=runner)
         # 槽位：0s（结束于+65s）-> 跳到+120s（睡55s）-> +180s（睡58s）-> +240>=200 结束
         self.assertEqual(stats.iterations, 3)
@@ -130,7 +130,7 @@ class TestMarketLoop(unittest.TestCase):
         self.assertEqual(len(dispatched), 1)
         self.assertIn("mode=market", dispatched[0])
         self.assertIn("relay=true", dispatched[0])
-        self.assertIn("interval_seconds=60", dispatched[0])
+        self.assertIn("interval_seconds=300", dispatched[0])
         self.assertIn("custom_title=我的行情", dispatched[0])
         self.assertEqual(ml.compute_exit_code(stats), 0)
 
@@ -168,7 +168,12 @@ class TestMarketLoop(unittest.TestCase):
             dispatches.append(cmd)
             return ml.CmdResult(0)
 
-        stats = ml.run_loop(_relay_cfg(loop_seconds=360.0), clock=clock.now, sleep=clock.sleep, runner=runner)
+        # 6 轮全失败（间隔压到 60s，保证 360s 窗口内 ≥3 轮），验证不接力且退出码非 0
+        stats = ml.run_loop(
+            _relay_cfg(loop_seconds=360.0, interval=60.0),
+            clock=clock.now, sleep=clock.sleep, runner=runner,
+        )
+        self.assertEqual(stats.iterations, 6)
         self.assertEqual(stats.ok_cycles, 0)
         self.assertEqual(dispatches, [])
         self.assertEqual(ml.compute_exit_code(stats), 1)
@@ -252,7 +257,7 @@ class TestMarketLoop(unittest.TestCase):
             with mock.patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": summary_path}):
                 code = ml.main([
                     "--demo", "--dry-run", "--loop-seconds", "0",
-                    "--interval", "60", "--out-dir", out_dir,
+                    "--interval", "300", "--out-dir", out_dir,
                     "--state-file", state_path,
                 ])
             self.assertEqual(code, 0)
@@ -262,6 +267,45 @@ class TestMarketLoop(unittest.TestCase):
                 md = fh.read()
             self.assertIn("五页行情数据面板（A/港/韩/日/美）", md)
             self.assertIn("推屏 5 页次", md)
+
+
+class TestFiveMinuteDefaults(unittest.TestCase):
+    """默认节奏是 5 分钟：CLI 默认值、轮次命令都带着同一个间隔。"""
+
+    def test_defaults_and_guard(self):
+        self.assertEqual(ml.DEFAULT_INTERVAL_SECONDS, 300.0)
+        self.assertEqual(ml.MIN_INTERVAL_SECONDS, 60.0)
+        cfg = ml.parse_args(["--dry-run"])
+        self.assertEqual(cfg.interval, 300.0)
+        cmd = ml.build_cycle_cmd(cfg)
+        self.assertEqual(cmd[cmd.index("--interval") + 1], "300")
+        # 1 分钟仍然可用（最小 60），只是不再是默认
+        self.assertEqual(ml.parse_args(["--dry-run", "--interval", "60"]).interval, 60.0)
+        with self.assertRaises(SystemExit):
+            ml.parse_args(["--dry-run", "--interval", "59"])
+
+    def test_dispatch_carries_interval(self):
+        cfg = _relay_cfg(interval=300.0)
+        res = ml.dispatch_once(cfg, runner=lambda cmd, **_k: ml.CmdResult(
+            0, out=json.dumps({"captured": cmd})
+        ))
+        self.assertEqual(res.code, 0)
+
+    def test_five_minute_slots_align(self):
+        clock = FakeClock()
+
+        def runner(cmd, *, cwd=None, timeout=0):
+            self.assertEqual(cmd[cmd.index("--interval") + 1], "300")
+            clock.t += 12.0
+            return ml.CmdResult(market_board.EXIT_OK, out="📊 行情 15/15 · 无变化 5 页\n")
+
+        stats = ml.run_loop(
+            ml.LoopConfig(interval=300.0, loop_seconds=900.0, dry_run=True, board_cmd=["board"]),
+            clock=clock.now, sleep=clock.sleep, runner=runner,
+        )
+        self.assertEqual(stats.iterations, 3)          # 0s / 300s / 600s（900s 是终点，不再跑）
+        self.assertEqual(stats.ok_cycles, 3)
+        self.assertAlmostEqual(sum(clock.sleeps), 2 * 288.0, places=1)
 
 
 if __name__ == "__main__":

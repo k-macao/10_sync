@@ -656,12 +656,12 @@ def task_eastmoney(dry_run=False, title_override=None, exclude_titles=None, hotl
 # ================= 主程序 =================
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="极趣墨水屏 五页全球行情数据面板（A / 港 / 韩 / 日 / 美，含变化，1分钟更新）",
+        description="极趣墨水屏 五页全球行情数据面板（A / 港 / 韩 / 日 / 美，含变化，5分钟更新）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""看板模式：
   --mode market（默认）   五页全球行情数据面板（1=A、2=港、3=韩、4=日、5=美），
-                        展示最新点位、涨跌额、涨跌幅、1分钟变化、日内高低/今开/振幅、
-                        成交股数与本币成交额；加 --loop 本地常驻每分钟更新。
+                        展示最新点位、涨跌额、涨跌幅、5分钟变化、日内高低/今开/振幅、
+                        成交股数与本币成交额；加 --loop 本地常驻每 5 分钟更新。
   --mode brief            004/003/007 五页简报（调用 brief_board.py）。
   --mode octopus          调用仓库 02「章鱼 AI · 打氧日报」5 页。
   --mode news             财新社（1-2页）+ 东方财富（3-4页）新闻看板。
@@ -675,11 +675,11 @@ def parse_args():
     parser.add_argument("--demo", action="store_true",
                         help="market 模式：离线演示（使用实测行情样例，不联网）")
     parser.add_argument("--demo-delta", action="store_true",
-                        help="market 模式：离线演示并附带上一分钟变化基线")
+                        help="market 模式：离线演示并附带上一轮变化基线")
     parser.add_argument("--loop", action="store_true",
                         help="market 模式：常驻循环按 --interval 秒持续更新推屏")
-    parser.add_argument("--interval", dest="interval", type=float, default=60.0,
-                        help="market 模式：常驻更新间隔秒数（默认 60 = 1分钟）")
+    parser.add_argument("--interval", dest="interval", type=float, default=300.0,
+                        help="market 模式：更新间隔秒数（默认 300 = 5 分钟，最小 60）")
     parser.add_argument("--from-file", dest="from_file", type=str, default=None,
                         help="octopus 模式：用本地日报 HTML 渲染（离线自测，不联网）")
     parser.add_argument("--max-age-hours", dest="max_age_hours", type=float, default=None,
@@ -787,7 +787,7 @@ def run_news(args, dry_run_mode):
 
 
 def run_market(args, dry_run_mode):
-    """五页全球行情数据面板：1=A、2=港、3=韩、4=日、5=美（含变化，1分钟更新）。"""
+    """五页全球行情数据面板：1=A、2=港、3=韩、4=日、5=美（含变化，5分钟更新）。"""
     pages = args.pages or enabled_pages()
     use_demo = bool(args.demo or args.demo_delta)
     if args.loop:
@@ -813,6 +813,7 @@ def run_market(args, dry_run_mode):
         force=args.force,
         demo=use_demo,
         demo_delta=bool(args.demo_delta),
+        interval_seconds=args.interval,
     )
     if dry_run_mode or use_demo:
         print("💡 五页行情预览图已生成：page_1.png(A) .. page_5.png(美)")

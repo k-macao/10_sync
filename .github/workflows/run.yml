@@ -1,12 +1,16 @@
-# 五页全球行情数据面板（极趣墨水屏 1=A / 2=港 / 3=韩 / 4=日 / 5=美，含变化，1分钟更新）
+# 五页全球行情数据面板（极趣墨水屏 1=A / 2=港 / 3=韩 / 4=日 / 5=美，含变化，5分钟更新）
 #
 # 默认行为（mode=market，零人工干预，不向仓库产生机器人提交）：
 #   · 五页分工：Page 1 A股 / Page 2 港股 / Page 3 韩股 / Page 4 日股 / Page 5 美股
-#   · 每页展示：最新点位 + 日内涨跌额/涨跌幅 + 1分钟变化 + 日内开/高/低/振幅/区间条 + 成交股数/本币成交额
-#   · 更新频率：常驻循环每 60 秒抓取一轮（market_loop.py），仅把画面有变化的页推送到 Zectrix 墨水屏；
-#               休市或行情未变的页跳过推送（零多余闪屏）；单页无有效行情时保留上一版内容
+#   · 每页展示：最新点位 + 日内涨跌额/涨跌幅 + 5分钟变化 + 日内开/高/低/振幅/区间条 + 成交股数/本币成交额
+#   · 更新频率：常驻循环每 300 秒（5 分钟）一轮，且每轮都是「先抓取 → 再渲染 → 再推送」，
+#               抓取只发生在推送之前，两轮之间不空转刷接口（market_loop.py）；
+#               仅把画面有变化的页推送到 Zectrix 墨水屏，休市或行情未变的页跳过推送（零多余闪屏）；
+#               单页无有效行情时保留上一版内容
+#   · 数据源：腾讯 / 新浪 / Naver / 新浪国际指数 / 网易财经 / 东方财富 共 7 路公开免密钥接口互备，
+#               同一指数多源比对后再采用（market_quotes.py）
 #   · 连续接力：单任务上限 6 小时，每轮运行 330 分钟（5.5 小时）；正常跑满 5 分钟后自动预约下一轮排队，
-#               本轮结束即刻接棒；新代码 push 或手动触发时当前轮 1 分钟内自动让位；
+#               本轮结束即刻接棒；新代码 push 或手动触发时当前轮在下一轮（≤5 分钟）自动让位；
 #               整条链意外中断时由 market-watchdog.yml 定时重新拉起
 #   · 兼容旧模式：手动 Run workflow 时 mode 仍可选 brief / octopus / news / both
 #
@@ -30,7 +34,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: '看板模式：market=五页行情面板 A/港/韩/日/美 1分钟更新（默认）/ brief / octopus / news / both'
+        description: '看板模式：market=五页行情面板 A/港/韩/日/美 5分钟更新（默认）/ brief / octopus / news / both'
         required: false
         default: 'market'
         type: choice
@@ -46,9 +50,9 @@ on:
         default: '1,2,3,4,5'
         type: string
       interval_seconds:
-        description: 'market 模式：更新间隔秒数（默认 60 = 1分钟，最小 30）'
+        description: 'market 模式：推送间隔秒数（默认 300 = 5分钟，最小 60；每轮先抓取再推送）'
         required: false
-        default: '60'
+        default: '300'
         type: string
       custom_title:
         description: '自定义顶栏前缀（留空默认显示 A股行情 / 港股行情 / 韩股行情 / 日股行情 / 美股行情）'
@@ -88,7 +92,7 @@ permissions:
 
 env:
   IS_DEFAULT_BRANCH: ${{ github.ref_name == github.event.repository.default_branch }}
-  INTERVAL_SECONDS: '60'
+  INTERVAL_SECONDS: '300'
   LOOP_MINUTES: '330'
 
 jobs:
@@ -113,7 +117,7 @@ jobs:
         run: python3 -m unittest discover -s tests -v
 
   push:
-    name: 五页行情面板（每分钟更新推屏）
+    name: 五页行情面板（每 5 分钟更新推屏）
     runs-on: ubuntu-latest
     timeout-minutes: 350
     # 同一分支只允许一个常驻循环在跑：预约的接力排队等候；新代码或手动触发排队时当前轮自动让位
@@ -216,7 +220,7 @@ jobs:
               if [ "$FORCE" = "true" ]; then
                 ARGS+=(--force)
               fi
-              echo "执行(每分钟常驻): python3 market_loop.py ${ARGS[*]}"
+              echo "执行(定时常驻，默认 5 分钟一轮): python3 market_loop.py ${ARGS[*]}"
               python3 market_loop.py "${ARGS[@]}"
             fi
           elif [ "$MODE" = "brief" ]; then

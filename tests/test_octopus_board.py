@@ -734,7 +734,7 @@ class TestWorkflow(unittest.TestCase):
     def test_memo_workflow_has_market_and_octopus_pipeline(self):
         for key in (
             "workflow_dispatch:", "concurrency:", "cancel-in-progress: false",
-            "INTERVAL_SECONDS: '60'", "default: 'market'", "market_loop.py",
+            "INTERVAL_SECONDS: '300'", "default: 'market'", "market_loop.py",
             "--relay", "MARKET_STATE_FILE", "--mode", "--max-age-hours",
             "OCTOPUS_STATE_FILE", "unittest",
         ):
@@ -745,7 +745,7 @@ class TestWorkflow(unittest.TestCase):
         self.assertRegex(self.active, r"(?m)^\s*python3 main\.py\s+\"\$\{ARGS\[@\]\}\"")
 
     def test_active_workflow_flags_are_tolerated_by_octopus_mode(self):
-        """活动工作流默认走 market 每分钟循环，且保留给 main.py octopus 模式的参数全部兼容。"""
+        """活动工作流默认走 market 5 分钟循环，且保留给 main.py octopus 模式的参数全部兼容。"""
         for flag in ("--mode", "--pages", "--max-age-hours", "--title", "--force", "--dry-run"):
             self.assertIn(flag, self.active, f"活动工作流缺少 {flag}")
         import main
@@ -776,7 +776,7 @@ class TestWorkflow(unittest.TestCase):
         self.assertIn("GH_TOKEN", self.active)
         self.assertIn("actions: write", self.active)
         self.assertIn("concurrency:", self.active)
-        self.assertIn("INTERVAL_SECONDS: '60'", self.active)
+        self.assertIn("INTERVAL_SECONDS: '300'", self.active)
         self.assertIn("timeout-minutes: 350", self.active)
         # 看门狗提供 cron 兜底，仅在 run.yml 无未结束运行时拉起 mode=market
         self.assertIn("schedule:", self.watchdog)
