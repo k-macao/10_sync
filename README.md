@@ -1,228 +1,88 @@
-# 极趣墨水屏 章鱼 AI·全景分析 看板
+# 极趣墨水屏 五页全球行情数据面板（A / 港 / 韩 / 日 / 美）
 
-**⏱️ 5分钟复刻，专属桌面财经资讯看板。**
+适配极趣墨水屏 (Zectrix) **400×300 1-bit** 五页看板，默认全屏展示 **A、港、韩、日、美** 五大市场实时行情数据面板，**含日内涨跌与 1 分钟变化**，**每 1 分钟自动更新**。
 
-本项目为极趣墨水屏 (Zectrix) 打造，五页顶栏统一显示 **章鱼 AI·全景分析**，自动抓取、自动排版、自动推屏。
+五页渲染效果（`python3 market_board.py --demo-delta --dry-run --contact-sheet images/market_preview.png`）：
 
-**默认内容 = 常驻看板「004/003/007 五页简报」**（每天两次自动更新，见下节）；
-打氧日报 / 新闻简报仍可随时用 `--mode octopus` / `--mode news` 切回。
-
-<img src="./images/preview.jpg" width="60%">
-
-五页实拍（离线样例日报渲染，`python3 main.py --from-file tests/fixtures/latest_sample.html --dry-run`）：
-
-<img src="./images/octopus_preview.png" width="70%">
+<img src="./images/market_preview.png" width="85%">
 
 ---
 
-## 🧾 常驻看板：004/003/007 五页简报（mode=brief，默认）
+## 📊 五页数据面板（`mode=market`，默认）
 
-定时任务每天两次（UTC 00:00 / 12:00 = 北京时间 08:00 / 20:00）拉取三处公开来源，
-解析成 5 页**纯原文**简报（不加说明注释）推上墨水屏，`brief_board.py` 全权负责：
+| 页 | 市场 | 覆盖指数 | 展示数据与变化 | 金额/量纲口径（原币直出，不换算） |
+|---|---|---|---|---|
+| **1** | **A**（A股） | 上证指数、深证成指、创业板指、沪深300、科创50 | 最新点位、▲/▼涨跌额、涨跌幅徽章、`1分` 点位变化、日内高/低、成交额；底栏沪深两市总成交额及 `1分` 增量 | `人民币` |
+| **2** | **港**（港股） | 恒生指数、恒生科技、恒生国企 | 最新点位、▲/▼涨跌额、涨跌幅徽章、`1分` 点位变化、今开、日内低—高区间条、振幅、成交股数、成交额；底栏主板成交额及 `1分` 增量 | `港元` / `股` |
+| **3** | **韩**（韩股） | KOSPI、KOSDAQ | 最新点位、交易状态、涨跌幅徽章、▲/▼涨跌额、`1分` 点位与百分比变化、振幅、日内低—高区间条、今开/昨收、成交股数、成交额；底栏两板总成交额及 `1分` 增量 | `韩元` / `股` |
+| **4** | **日**（日股） | 日经225、东证指数 | 最新点位、交易状态、涨跌幅徽章、▲/▼涨跌额、`1分` 点位与百分比变化、振幅、日内低—高区间条、今开/昨收、成交股数；底栏两指成交股数及 `1分` 增量（东证交易所延迟约 15 分钟，日经盘中实时叠加） | `日元`（点位）/ `股` |
+| **5** | **美**（美股） | 道琼斯、纳斯达克、标普500 | 最新点位、▲/▼涨跌额、涨跌幅徽章、`1分` 点位变化、今开/昨收、日内低—高区间条、振幅、成交股数；底栏三指成交股数及 `1分` 增量 | `美元`（点位）/ `股` |
 
-| 页 | 内容（一律原文） | 来源 |
-|---|---|---|
-| 1 | `00 / 每日 VIX 恐慌指数`（VIX / 今日判读 / 恒指涨跌幅）+ `07 / 核心结论` 全文 | [004 每日简报](https://k-macao.github.io/004/) |
-| 2 | 机会点 / 风险点（含多空概率、各行出处、SCAN_ERROR、FRESHNESS） | [003 push.preview.html](https://github.com/k-macao/003/blob/main/push.preview.html) |
-| 3 | 机会节点，一行一个（含时段要点） | 004 + 003 |
-| 4 | 📊 美银牛熊指标（BofA Bull & Bear）读数 / 分项 + 简报固定章节顺序 | [007 pushplus_deepseek.py](https://github.com/k-macao/007/blob/main/pushplus_deepseek.py) |
-| 5 | ⚠️ 研报 AI 风险点提示 全文（口径 / 关键词 / prompt / 兜底段落 / 尾注） | [007 README](https://github.com/k-macao/007/blob/main/README.md) |
-
-```bash
-python3 brief_board.py --dry-run               # 预览五页（真实拉 004/003/007，不推送）
-python3 brief_board.py --pages 1,2 --dry-run   # 只看前两页
-python3 brief_board.py --max-age-hours 0       # 关闭 004 新鲜度校验（默认 48 小时）
-```
-
-> ✅ 004/003/007 拉不到 / 过期 / 标记缺失 → 退出码 1，Actions 显红，墨水屏保留上一次内容。
-> ✅ 顶栏依旧只有 **章鱼 AI·全景分析** + 页码；页脚口径 `数字与正文同源 · 非投资建议`。
-> ✅ BofA 读数与风险提示文案**直接从 007 源码 / README 提取**（不是写死的），007 更新即跟上；
->    读数超 10 天自动标「⏳ 已过期」。
-> ✅ 手动触发（Actions → Run workflow）时 `mode` 选 `brief` 即常驻看板，`octopus`/`news`/`both` 走旧管线。
+- **数据源（公开免密钥，4 路并发互备）**：腾讯证券 `qt.gtimg.cn`（A / `r_hk*` 港股实时 / 美股 / 日韩实时点位）+ 新浪财经 `hq.sinajs.cn`（港股成交股数 + A/港/美独立热备）+ Naver 金融 `domestic/index`（KOSPI/KOSDAQ 实时全字段）+ Naver 金融 `worldstock/index`（日经225/东证全字段）。
+- **变化计算（`apply_delta_state`）**：同时展示**较昨收涨跌额/涨跌幅**（涨为黑底反白徽章 + `▲`，跌为白底描边徽章 + `▼`）与**较上一分钟点位/成交变化**（`1分 ±X.XX`）；休市重复采样保持最后一跳变化不洗零，跨交易日自动重置 1 分钟基线。
+- **墨水屏防闪屏 & 容错**：每页独立计算 1-bit 像素 SHA-256，**仅推送画面发生变化的页**（例如夜间美股开盘时只刷新第 5 页，1–4 页休市零刷屏）；单页临时无有效行情时跳过推送，保留屏上原内容；推送失败页下一分钟自动补推。
 
 ---
 
-## 📌 看板显示内容（打氧日报模式 mode=octopus）
+## ⏱️ 一分钟自动更新（GitHub Actions 常驻接力 + 看门狗）
 
-适配 400×300 分辨率，共 5 页（**顶栏五页统一**，正文互不重复）。**全屏排版**：条目少自动升大字号、
-行距摊满整屏并垂直居中；条目多保持标准密度，放不下才降档救条目。
+只需在仓库 `Settings → Secrets and variables → Actions` 配置两个密钥（行情接口全部免密钥）：
 
-| 页 | 顶栏 | 来自仓库 02 的栏目（2026-10 新版 00~17） | 内容策略 |
-|---|---|---|---|
-| 1 | 章鱼 AI·全景分析 | `17 · SHORT CARD`【闪电飞鱼】短线速查卡 | 30 秒读完：定调 / 明日剧本 / 七日风 / 板块强弱 / 水位 / 风声 / 新手小抄 |
-| 2 | 章鱼 AI·全景分析 | `16 · FORECAST`【回游金枪鱼】今日预判 | 方向与关键数字：量化预测 / 七日预测 / 倾向 / 核心判断 / A股 / 港股 / 美股 |
-| 3 | 章鱼 AI·全景分析 | `02 · QUANT FORECAST` + `03 · HK PROBABILITY` + `04 · LIQUIDITY FLOW` + `00 · RETAIL SENTIMENT` | 量化与策略 / 市场与资金（每栏取摘要行） |
-| 4 | 章鱼 AI·全景分析 | `07 · POLICY SHOCK` + `08 · FED TREND` + `09 · GEO TREND` + `14 · NEWS SENTIMENT` + `11 · MARKET REVIEW` + `15 · SUMMARY` | 政策与日程 / 资讯与情绪（每栏取摘要行） |
-| 5 | 章鱼 AI·全景分析 | `10 · ECON CALENDAR`【探照安康鱼】时间节点 | 今明 ★★★ 时间点逐条（北京时间为序）+ 30 天窗口摘要（央行议息 / 最密集日） |
+| Secret | 说明 |
+|---|---|
+| `ZECTRIX_API_KEY` | 极趣云 API Key（https://cloud.zectrix.com） |
+| `ZECTRIX_MAC` | 墨水屏 MAC 地址（如 `AA:BB:CC:DD:EE:FF`） |
 
-> 日报老版式（`00 · SHORT CARD` / `01 · AI DIGEST` / `02 · FORECAST` / `03 · ECON CALENDAR`）照样认：
-> 有 `01 · AI DIGEST` 就直接切它的四个分节；改版后没有这栏了，第 3/4 页按上表取各专题栏目的摘要行
-> （逐标的、逐条新闻的流水行不上小屏）。改版后的栏目名靠 `SECTION nn · NAME` 还原，编号变了也不影响取栏。
+工作流 `.github/workflows/run.yml`（与根目录 `w.yml` 逐字同步）+ `.github/workflows/market-watchdog.yml`：
 
-```bash
-python3 main.py --dry-run                            # 五页全预览（真实拉仓库 02）
-python3 main.py --from-file 样例.html --dry-run       # 离线预览（不联网）
-python3 main.py --from-file tests/fixtures/latest_sample_lime.html \
-                --max-age-hours 9999 --dry-run       # 用 2026-10 改版后的样例日报离线预览
-python3 main.py --mode news --dry-run                # 切回原来的财新+东财新闻看板（只用 1-4 页）
-python3 main.py --pages 1,2,3,4 --dry-run            # 只要前四页（不推日历页）
-```
-
-> ✅ 顶栏只显示 **章鱼 AI·全景分析**（不带 ◆ 前缀、不带来源标签、不带页码），五页完全一致。
-> ✅ 每页顶栏下方写明**日报栏目原名**（对着微信日报能核对是哪一栏），页脚固定一行口径
-> （`日报更新时间 · 当天源 N/M · 数字与正文同源 · 非投资建议`）。
-> ✅ **放不下就如实说**：被版面截断的条目加「…」，整条没上屏的写「▼ 另有 N 项 · 全文见微信打氧日报」——
-> 绝不悄悄少给，也不用旧内容顶替。
-> 默认：`--mode brief`（常驻看板 004/003/007 五页简报）；`--mode octopus` 调用仓库 02 打氧日报。
-
-### 顶栏想改？
-
-```python
-# board_core.py 顶部
-BOARD_TITLE = "章鱼 AI·全景分析"   # 顶栏文案
-HEADER_SHOW_SOURCE = False        # True → 追加 ·财新社 / ·东方财富（仅 news 模式）
-HEADER_SHOW_PART   = False        # True → 追加 (一) / (二)
-HEADER_PREFIX      = ""           # 填 "◆ " 可加回菱形前缀
-ENABLED_PAGES      = "1,2,3,4,5"  # 控制推哪几页（1,2,3,4 = 不推日历页）
-```
-
-也可临时用命令行覆盖顶栏文案（五页统一）：`python3 main.py --title "章鱼 AI·全景分析"`
-
-### 数据源：仓库 02 的推送页
-
-- **来源**：`k-macao/02` 的 `output/latest.html`（章鱼 AI · 打氧日报，推微信的那一页）。
-- **抓取顺序**：`raw.githubusercontent.com` 优先 → 失败自动切 GitHub Contents API（`GITHUB_TOKEN` 可选）。
-  可用 `OCTOPUS_REPO` / `OCTOPUS_REF` / `OCTOPUS_PATH` 换源。
-- **解析**：日报用 `<!--SPLIT-->` 把 18 个栏目切开，每栏再按「标签 `<br>` 内容」拆成条目；
-  「🦑 鲜鲜解读 / 阅读提醒」这类附注不进墨水屏正文。
-  两种版式都认：老版 `<h2>` 是容器的直接子节点、一行三格的日历表；
-  2026-10 新版把 `<h2>` 嵌进 `<table><tr><td>`、栏目重排成 00~17、正文变成「表里套表」
-  （外壳行只分组、内容在子表里，只递归子表、不重抄整棵树），日历压成一行一格
-  （`10-14 周三 T+3 时间 00:00 影响经济的时间点 ★★★ 中国 · …`）。
-  回归样本在 `tests/fixtures/latest_sample_lime.html`，`TestLimeLayout` 盯着这套版式。
-- **日历页**：第 5 页读 `ECON CALENDAR` 的表格——表里只有每天第一行写日期，
-  其余行按行继承（否则「20:15 ADP」会被算到明天），并根据公共前后缀把同一时刻的
-  多条读数压成一条（`ISM:PMI:制造业/就业/新订单/…:季调`），整句不做改写。
-  新版把「今天/明天」换成了相对日（`T+3`）——照原样上屏，不做二次换算。
-- **新鲜度**：日报生成时间按**北京时间**比对，超过 `OCTOPUS_MAX_AGE_HOURS`（默认 36 小时）判定仓库 02 停更。
-
-> **2026-10 日报改版适配**：仓库 02 在 2026-10-04 前后换了推送页版式
-> （白底圆角卡片 + 荧光绿、`SECTION nn · NAME` 栏目头、正文章节名 `【闪电飞鱼】短线速查卡`，
-> 并且取消了 `01 · AI DIGEST` 这一栏），旧解析器会把 18 个栏目解析成 0 个、整轮失败。
-> 现在：栏目头从容器子树里找、按 `SECTION nn · NAME` 还原栏目名（编号变了也能对上）、
-> 第 3/4 页改从各专题栏目取摘要行、日历表支持一行一格的新版式 —— 新旧两种日报都能推。
+1. **每 60 秒一轮**：`market_loop.py` 按单调时钟对齐 60 秒槽位循环调用 `market_board.py`，不向仓库产生任何机器人 commit（变化基线与页面指纹存于 `.octopus/market_state.json`，跨轮通过 Actions Cache 传递）。
+2. **无缝自动接力**：单轮运行 330 分钟（5.5 小时）；正常跑满 5 分钟且至少成功采样 1 轮后自动预约下一轮排队，本轮结束立即接棒。
+3. **自动让位**：推送新代码或人工点击 `Run workflow` 时，当前运行在 1 分钟内自动收尾让位。
+4. **看门狗兜底**：`market-watchdog.yml` 每小时 17、47 分检查一次，仅当没有任何运行中/排队中的 `run.yml` 时重新拉起 `mode=market`。
+5. **如何暂停**：在 Actions 页面同时 Disable「章鱼 AI·全景分析 看板」与「行情面板看门狗」，再取消当前运行中与排队中的任务。
 
 ---
 
-## 🛠️ 部署指南
-
-### 1. Fork
-右上角 `Fork` 到自己账号。
-
-### 2. 字体（可选）
-上传 `.ttf` 字体重命名为 `font.ttf` 覆盖。
-
-### 3. Secrets
-只需配置 2 个（天气 Key 已不再需要）：
-
-| Name | Secret | 获取 |
-|---|---|---|
-| `ZECTRIX_API_KEY` | 极趣云 API Key | https://cloud.zectrix.com |
-| `ZECTRIX_MAC` | 墨水屏 MAC | 如 `AA:BB:CC:DD:EE:FF` |
-
-> 仓库 02 是 **public** 仓库，拉它的日报**不需要任何密钥**。
-
-### 4. 自定义
-- 顶栏 / 启用页：编辑 `board_core.py` 顶部（见上）。
-- 5 页各放哪些内容：编辑 `octopus_report.py` 的 `P1_KEEP` / `P2_KEEP` / `DIGEST_GROUPS` /
-  `CALENDAR_WINDOW_LABELS`。
-- 版面参数（字号、行高、留白）：边距 / 顶栏 / 全屏摊满工具在 `board_core.py` 的「400×300 版面骨架」，
-  正文区与密度档在 `octopus_board.py` 顶部的 `BODY_TOP` / `DENSITY`（loose 档用于条目少自动升字号）。
-
-### 5. Actions 全自动推
-
-以根目录 **`w.yml`** 为准（升级版工作流）。`cron` 为 UTC 时间，当前默认：
-**每天两次**（`0 0,12 * * *`，UTC 00:00 / 12:00 = **北京时间 08:00 / 20:00**），
-对齐仓库 02 的更新节奏（北京时间约 14:45 / 22:00 各出一版）。
-每次运行都会：拉仓库 02 的当日日报 → 校验新鲜度 → 排 5 页 → 推墨水屏，**全程无需人工干预**。
-想改频率就改这一行 cron（`w.yml` 与 `.github/workflows/run.yml` 要同步改）——
-`tests/test_octopus_board.py::TestWorkflow` 会校验：模板锁死每天两次，两份文件的
-**除 cron 外**必须逐字一致。
-
-> **为什么不是「每 2 小时盯一次」？** 日报一天只出两次，盯得再勤也拉不到新内容；
-> 一天两次刚好覆盖两次更新，还少推屏（墨水屏每推一次闪一次）。
-> 想临时补推一次：Actions → Run workflow（勾 `force` 可无视「内容未变」照推）。
-
-升级版 `w.yml` 多做两件事：
-
-1. **推屏前先跑离线回归测试**：解析 / 排版退化了当场变红，不会拿着一份坏日报去刷屏。
-2. **内容没变就不刷屏**：02 侧那半天没出新版时，两轮之间屏上内容是一样的，
-   不记状态就会来回推同一张图（墨水屏每推一次闪一次）。推送成功的指纹存在 Actions cache 里，
-   下一轮内容一致就跳过；要强制重推用 `--force`（或手动触发时勾 `force`）。
-
-> **第 5 页（日历）已在默认推送列表里**：工作流 `pages` 默认值 = `1,2,3,4,5`。
-> 若手动传 `--pages 1,2,3,4`，`main.py` 每轮都会打印
-> 「⚠️ 第 5 页有内容，但不在本次推送列表里…」把这件事喊出来。
-
-不管用哪个版本，下面这条都成立：
-
-**失败即显红、整轮不推** —— 仓库 02 拉不到 / 过期 / HTML 改版 / 墨水屏推送失败，
-一律**退出码 1**，Actions 变红告警；墨水屏**保留上一次的内容**，不会被覆盖成空白或残缺内容。
-工作流还带 `concurrency` 防重叠：上一次没跑完就排队，不会并发推送。
-
-### 6. 手动运行
-Actions → 章鱼 AI·全景分析 看板 → Run workflow
-- `mode`：`octopus`（默认，调用仓库 02）/ `news`（财新+东财）/ `both`
-- `pages`：默认 `1,2,3,4,5`（推满五页，含日历页）；想少推几页就填 `1,2` 之类
-- `custom_title`：覆盖顶栏文案（五页统一），留空即「章鱼 AI·全景分析」
-- `max_age_hours`：日报新鲜度上限（小时），默认 `36`
-- `force`：内容与上次一致也照推
-- `dry_run`：预览不推送
-
----
-
-## 💻 本地预览
+## 💻 本地运行与预览
 
 ```bash
 pip install requests pillow
 
-# 调用仓库 02（需要联网）
+# 离线演示五页（含 1 分钟变化，不联网、不推送）
+python3 market_board.py --demo-delta --dry-run --contact-sheet images/market_preview.png
+
+# 真实联网单轮预览（不推墨水屏）
 python3 main.py --dry-run
 
-# 离线自测（不联网，用仓库里的样例日报）
-python3 main.py --from-file tests/fixtures/latest_sample.html --dry-run
-
-# 切回新闻看板：1-2财新 + 3-4东方财富
-python3 main.py --mode news --pages 1,2,3,4 --dry-run
-
-# 直接调日报模块，打印解析结果（不渲染）
-python3 octopus_report.py tests/fixtures/latest_sample.html
+# 真实推送到 Zectrix 墨水屏
+export ZECTRIX_API_KEY=你的Key
+export ZECTRIX_MAC=AA:BB:CC:DD:EE:FF
+python3 main.py                        # 单轮推送五页（1=A,2=港,3=韩,4=日,5=美）
+python3 main.py --loop --interval 60   # 本地常驻每 1 分钟自动更新推屏
+python3 market_board.py --pages 1,2,5  # 仅更新指定市场页
+python3 market_board.py --force        # 忽略像素指纹强制重推五页
 ```
 
-推送：
+### 兼容保留的历史模式
+
+手动运行或 Actions `Run workflow` 仍可随时切换：
 
 ```bash
-export ZECTRIX_API_KEY=xxx
-export ZECTRIX_MAC=AA:BB:CC:DD:EE:FF
-python3 main.py                    # 调用仓库 02，推 5 页
+python3 main.py --mode brief --dry-run                                 # 004/003/007 五页简报
+python3 main.py --mode octopus --dry-run                               # 仓库 02 打氧日报五页
+python3 main.py --from-file tests/fixtures/latest_sample.html --dry-run # 打氧日报离线预览
+python3 main.py --mode news --pages 1,2,3,4 --dry-run                  # 财新 + 东方财富新闻看板
 ```
 
 ---
 
-## 🧪 测试
-
-全部离线，不联网、不推墨水屏：
+## 🧪 离线回归测试
 
 ```bash
-python3 -m unittest discover -s tests -v      # 70 项
+python3 -m unittest discover -s tests -v
 ```
 
-覆盖：日报解析（栏目/标签/附注分流）、**2026-10 改版版式**（表头嵌进表格 / 栏目重排 / 表里套表不重复计数 /
-日历一行一格 / 摘要行上屏、流水行不占屏 / 渲染内容逐字来自原文）、财经日历解析（日期按行继承 / 同刻事件合并 / 月份不混）、
-5 页排版计划与优先级、退化保护（少栏目也不推空屏）、
-新鲜度（北京时间 / 过期 / 时钟异常）、截断与「另有 N 项」如实披露、越界与重叠防护、
-抓取失败整轮跳过、标签归一化、工作流与 `main.py` 的衔接（旧工作流的参数在 octopus 模式下必须接得住）、
-定时节奏（模板锁死每天两次 = 北京时间 08:00 / 20:00 / 活动工作流待同步时只告警不变红）。
+覆盖：五页顺序与原生币种约束、腾讯/新浪/Naver 四路解析与时区换算（含美东夏令时/冬令时）、多源合并与单源断流兜底、日经盘中叠加与异常偏离保护、1 分钟变化幂等与跨日重置、五页 400×300 1-bit 排版越界校验（含极端大数与缺项）、按页像素指纹去重与失败自动补推、60 秒常驻循环接力/让位/看门狗配置，以及原有 `brief` / `octopus` 全部回归用例。
 
 ---
 
@@ -230,17 +90,12 @@ python3 -m unittest discover -s tests -v      # 70 项
 
 | 文件 | 作用 |
 |---|---|
-| `board_core.py` | 两块看板共用的底层：字体、顶栏文案、启用页、Zectrix 推送通道 |
-| `octopus_report.py` | 拉取 / 解析仓库 02 的日报 HTML，新鲜度校验，排 5 页的内容计划 |
-| `octopus_board.py` | 把内容渲染成 400×300 1-bit 图并推送；推送指纹（内容没变就跳过） |
-| `main.py` | 命令行入口：`--mode octopus`（默认）/ `news` / `both` |
-| `tests/` | 离线回归测试 + 日报样例 `fixtures/latest_sample.html` |
-| `manual_*.py` | 单来源手动推送小工具（独立脚本，不受本次改动影响） |
-
----
-
-## 致谢
-- 财新网 https://www.caixin.com
-- 东方财富、知乎等数据源
-- 极趣云 Zectrix
-- 数据与结论来自 **仓库 02 · 章鱼 AI · 打氧日报**（推送到微信的那一页）
+| `market_quotes.py` | 五大市场（A/港/韩/日/美）四路并发抓取、纯函数解析、多源合并、1 分钟变化状态演进与单位格式化 |
+| `market_board.py` | 400×300 1-bit 五页行情面板渲染器、版面越界预检、按页 SHA-256 指纹去重与 Zectrix 推送 |
+| `market_loop.py` | 60 秒常驻更新循环、GitHub Actions 5.5 小时自动接力、新运行自动让位与运行摘要 |
+| `.github/workflows/run.yml` / `w.yml` | 主工作流（默认 `mode=market` 每分钟更新，保留 `brief`/`octopus`/`news`/`both`） |
+| `.github/workflows/market-watchdog.yml` | 每半小时巡检看门狗，接力链意外中断时自动重拉 |
+| `board_core.py` | 共用底层：画布尺寸、字体加载、单位规范化、Zectrix 云端推送通道 |
+| `main.py` | 统一命令行入口（默认 `--mode market`，支持 `--loop` 常驻） |
+| `brief_board.py` / `octopus_board.py` / `octopus_report.py` | 保留兼容的简报与打氧日报模式 |
+| `tests/` | 全部离线单元测试与行情/日报 fixtures |

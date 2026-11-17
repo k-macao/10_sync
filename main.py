@@ -1,3 +1,4 @@
+import sys
 import requests
 import re
 import json
@@ -655,36 +656,47 @@ def task_eastmoney(dry_run=False, title_override=None, exclude_titles=None, hotl
 # ================= 主程序 =================
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="极趣墨水屏 章鱼 AI·全景分析 看板（5 页 400×300）",
+        description="极趣墨水屏 五页全球行情数据面板（A / 港 / 韩 / 日 / 美，含变化，1分钟更新）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""两种看板：
-  --mode octopus（默认）  调用仓库 02「章鱼 AI · 打氧日报」的当日推送页，
-                        解析成 5 页推到墨水屏：1 速查卡 / 2 今日预判 /
-                        3-4 AI 全篇速览 / 5 时间节点。仓库 02 拉不到 / 过期 /
-                        解析不出内容时整轮跳过、保留墨水屏原有内容并以退出码 1 报错。
-  --mode news             原来的新闻看板：1-2 页财新社 + 3-4 页东方财富（不占第 5 页）。
-  --mode both             先推打氧日报 5 页，再把新闻页覆盖回 1-4 页（设备只认 5 页，慎用）。""",
+        epilog="""看板模式：
+  --mode market（默认）   五页全球行情数据面板（1=A、2=港、3=韩、4=日、5=美），
+                        展示最新点位、涨跌额、涨跌幅、1分钟变化、日内高低/今开/振幅、
+                        成交股数与本币成交额；加 --loop 本地常驻每分钟更新。
+  --mode brief            004/003/007 五页简报（调用 brief_board.py）。
+  --mode octopus          调用仓库 02「章鱼 AI · 打氧日报」5 页。
+  --mode news             财新社（1-2页）+ 东方财富（3-4页）新闻看板。
+  --mode both             先推打氧日报 5 页，再覆盖 1-4 页新闻。""",
     )
-    parser.add_argument("--mode", dest="mode", type=str, default="octopus",
-                        choices=["octopus", "news", "both"],
-                        help="看板模式：octopus=调用仓库02日报（默认）/ news=财新+东财 / both=两个都推")
+    parser.add_argument(
+        "--mode", dest="mode", type=str, default="market",
+        choices=["market", "brief", "octopus", "news", "both"],
+        help="看板模式：market=五页行情面板A/港/韩/日/美（默认）/ brief / octopus / news / both",
+    )
+    parser.add_argument("--demo", action="store_true",
+                        help="market 模式：离线演示（使用实测行情样例，不联网）")
+    parser.add_argument("--demo-delta", action="store_true",
+                        help="market 模式：离线演示并附带上一分钟变化基线")
+    parser.add_argument("--loop", action="store_true",
+                        help="market 模式：常驻循环按 --interval 秒持续更新推屏")
+    parser.add_argument("--interval", dest="interval", type=float, default=60.0,
+                        help="market 模式：常驻更新间隔秒数（默认 60 = 1分钟）")
     parser.add_argument("--from-file", dest="from_file", type=str, default=None,
                         help="octopus 模式：用本地日报 HTML 渲染（离线自测，不联网）")
     parser.add_argument("--max-age-hours", dest="max_age_hours", type=float, default=None,
-                        help="octopus 模式：日报新鲜度上限（小时），默认 36")
+                        help="octopus/brief 模式：新鲜度上限（小时），默认 36")
     parser.add_argument("--allow-stale", action="store_true",
                         help="octopus 模式：超过新鲜度上限也照推（默认整轮跳过并报错）")
     parser.add_argument("--force", action="store_true",
-                        help="octopus 模式：即使内容与上次推送一致也照推（默认跳过，避免反复刷屏）")
+                        help="即使内容与上次推送一致也强制重推（默认跳过，避免反复刷屏）")
     parser.add_argument("--source", dest="source", type=str, default=None,
                         help="news 模式：第1-2页热搜源: zhihu/bilibili/github/eastmoney/caixin (默认 caixin)")
     parser.add_argument("--pages", dest="pages", type=str, default=None,
-                        help="覆盖推送页面，例如 \"1,2\" 仅推两页，\"1,2,3,4,5\" 推五页")
+                        help="覆盖推送页面，例如 \"1,2\" 仅推两页，\"1,2,3,4,5\" 推五页（A,港,韩,日,美）")
     parser.add_argument("--dry-run", action="store_true", help="仅本地生成预览图，不推送到 Zectrix")
     parser.add_argument("--east-column", dest="east_column", type=str, default=None,
                         help="news 模式：东方财富栏目ID（第3-4页），默认345（财经导读）")
     parser.add_argument("--title", dest="title", type=str, default=None,
-                        help="覆盖顶栏文案（五页统一），默认「章鱼 AI·全景分析」")
+                        help="覆盖顶栏文案")
     return parser.parse_args()
 
 
@@ -774,15 +786,70 @@ def run_news(args, dry_run_mode):
     return 0
 
 
+def run_market(args, dry_run_mode):
+    """五页全球行情数据面板：1=A、2=港、3=韩、4=日、5=美（含变化，1分钟更新）。"""
+    pages = args.pages or enabled_pages()
+    use_demo = bool(args.demo or args.demo_delta)
+    if args.loop:
+        import market_loop
+
+        argv = ["--pages", pages, "--interval", str(args.interval), "--forever"]
+        if args.title:
+            argv += ["--title", args.title]
+        if args.force:
+            argv.append("--force")
+        if dry_run_mode or use_demo:
+            argv.append("--dry-run")
+        if use_demo:
+            argv.append("--demo")
+        return market_loop.main(argv)
+
+    import market_board
+
+    res = market_board.run_once(
+        pages_arg=pages,
+        custom_title=args.title,
+        dry_run=dry_run_mode or use_demo,
+        force=args.force,
+        demo=use_demo,
+        demo_delta=bool(args.demo_delta),
+    )
+    if dry_run_mode or use_demo:
+        print("💡 五页行情预览图已生成：page_1.png(A) .. page_5.png(美)")
+    return res.exit_code
+
+
+def run_brief(args, dry_run_mode):
+    """004/003/007 五页简报（保留兼容）。"""
+    import brief_board
+
+    age = 48 if args.max_age_hours is None else args.max_age_hours
+    try:
+        return brief_board.run(
+            pages_arg=args.pages or enabled_pages(),
+            dry_run=dry_run_mode,
+            title=args.title,
+            max_age_hours=age,
+        )
+    except brief_board.BriefError as exc:
+        print(f"❌ {exc}")
+        return 1
+
+
 if __name__ == "__main__":
     args = parse_args()
+
+    # 兼容旧命令：显式传了 --from-file 但未改 --mode 时，自动走 octopus 离线渲染
+    effective_mode = args.mode
+    if args.from_file and effective_mode == "market" and "--mode" not in sys.argv:
+        effective_mode = "octopus"
 
     if args.pages:
         set_enabled_pages(args.pages)
         print(f"🔧 命令行覆盖推送页面: {enabled_pages()}")
     if args.title:
         set_board_title(args.title)
-        print(f"🔧 顶栏文案覆盖(五页统一): {board_title()}")
+        print(f"🔧 顶栏文案覆盖: {board_title()}")
     if args.source:
         HOTLIST_SOURCE = args.source
         print(f"🔧 命令行覆盖第1-2页热搜源: {HOTLIST_SOURCE}")
@@ -791,15 +858,20 @@ if __name__ == "__main__":
         print(f"🔧 东方财富栏目覆盖(第3-4页): {EASTMONEY_COLUMN}")
 
     dry_run_mode = _resolve_dry_run(args)
-    print(f"🖥 模式: {args.mode} | 页面: {enabled_pages()} | {'dry_run' if dry_run_mode else 'push'}")
+    print(f"🖥 模式: {effective_mode} | 页面: {enabled_pages()} | {'dry_run' if dry_run_mode else 'push'}")
 
     exit_code = 0
-    if args.mode in ("octopus", "both"):
-        exit_code = run_octopus(args, dry_run_mode)
-    if args.mode in ("news", "both"):
-        if args.mode == "both":
-            # 设备只认 5 页：both 模式 = 打氧日报占 1-5，新闻页随后覆盖回 1-4
-            print("ℹ️ both 模式：打氧日报推 1-5 页，新闻看板随后覆盖 1-4 页（第 5 页保留日历）")
-        exit_code = run_news(args, dry_run_mode) or exit_code
+    if effective_mode == "market":
+        exit_code = run_market(args, dry_run_mode)
+    elif effective_mode == "brief":
+        exit_code = run_brief(args, dry_run_mode)
+    else:
+        if effective_mode in ("octopus", "both"):
+            exit_code = run_octopus(args, dry_run_mode)
+        if effective_mode in ("news", "both"):
+            if effective_mode == "both":
+                # 设备只认 5 页：both 模式 = 打氧日报占 1-5，新闻页随后覆盖回 1-4
+                print("ℹ️ both 模式：打氧日报推 1-5 页，新闻看板随后覆盖 1-4 页（第 5 页保留日历）")
+            exit_code = run_news(args, dry_run_mode) or exit_code
 
     raise SystemExit(exit_code)

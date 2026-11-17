@@ -1,50 +1,67 @@
-# 章鱼 AI·全景分析 看板（极趣墨水屏 5 页）— GitHub Actions 工作流
+# 五页全球行情数据面板（极趣墨水屏 1=A / 2=港 / 3=韩 / 4=日 / 5=美，含变化，1分钟更新）
 #
-# 默认行为（schedule 定时触发，零人工干预，mode=brief 常驻看板）：
-#   定时：每天两次（UTC 00:00 / 12:00 = 北京时间 08:00 / 20:00）
-#   ① 拉取 004 每日简报（k-macao.github.io/004）+ 003 机会点/风险点（push.preview.html）
-#      + 007 研报简报（pushplus_deepseek.py 源码提取 BofA 读数与原文文案）
-#   ② 解析成 5 页：004 原文 / 机会点·风险点原文 / 机会节点一行一项 / 007 简报 / 风险点提示原文
-#   ③ 新鲜度校验（默认 36 小时）+ 排版预算（放不下的如实披露条数）
-#   ④ 推送 5 页 400×300 1-bit 图到 Zectrix 墨水屏
-#   mode=octopus/news/both 仍走原打氧日报 / 新闻简报管线（main.py，含内容指纹去重）。
+# 默认行为（mode=market，零人工干预，不向仓库产生机器人提交）：
+#   · 五页分工：Page 1 A股 / Page 2 港股 / Page 3 韩股 / Page 4 日股 / Page 5 美股
+#   · 每页展示：最新点位 + 日内涨跌额/涨跌幅 + 1分钟变化 + 日内开/高/低/振幅/区间条 + 成交股数/本币成交额
+#   · 更新频率：常驻循环每 60 秒抓取一轮（market_loop.py），仅把画面有变化的页推送到 Zectrix 墨水屏；
+#               休市或行情未变的页跳过推送（零多余闪屏）；单页无有效行情时保留上一版内容
+#   · 连续接力：单任务上限 6 小时，每轮运行 330 分钟（5.5 小时）；正常跑满 5 分钟后自动预约下一轮排队，
+#               本轮结束即刻接棒；新代码 push 或手动触发时当前轮 1 分钟内自动让位；
+#               整条链意外中断时由 market-watchdog.yml 定时重新拉起
+#   · 兼容旧模式：手动 Run workflow 时 mode 仍可选 brief / octopus / news / both
 #
-# 失败即显红、整轮不推：004/003/007 拉不到 / 过期 / 标记缺失 / 推送失败，
-# 一律退出码 1 —— Actions 变红告警，墨水屏保留上一次的内容，不会被覆盖成空白或残缺内容。
+# 如何暂停更新：先在 Actions 页面 Disable 本工作流与「行情面板看门狗」，再取消运行中与排队中的运行。
 name: 章鱼 AI·全景分析 看板
 
 on:
-  schedule:
-    - cron: '0 0,12 * * *'   # 每天两次：UTC 00:00 / 12:00 = 北京时间 08:00 / 20:00
+  push:
+    branches: ["**"]
+    paths:
+      - ".github/workflows/run.yml"
+      - ".github/workflows/market-watchdog.yml"
+      - "w.yml"
+      - "board_core.py"
+      - "market_quotes.py"
+      - "market_board.py"
+      - "market_loop.py"
+      - "main.py"
+      - "font.ttf"
+      - "tests/**"
   workflow_dispatch:
     inputs:
       mode:
-        description: '看板模式：brief=常驻看板 004/003/007 五页简报（默认）/ octopus=调用仓库02日报 / news=财新+东财 / both=octopus+news'
+        description: '看板模式：market=五页行情面板 A/港/韩/日/美 1分钟更新（默认）/ brief / octopus / news / both'
         required: false
-        default: 'brief'
+        default: 'market'
         type: choice
         options:
+          - market
           - brief
           - octopus
           - news
           - both
       pages:
-        description: '推送页面（1,2,3,4,5=五页；1,2=只推前两页）'
+        description: '推送页面（1,2,3,4,5 = A,港,韩,日,美）'
         required: false
         default: '1,2,3,4,5'
         type: string
+      interval_seconds:
+        description: 'market 模式：更新间隔秒数（默认 60 = 1分钟，最小 30）'
+        required: false
+        default: '60'
+        type: string
       custom_title:
-        description: '覆盖顶栏文案（五页统一；留空即「章鱼 AI·全景分析」）'
+        description: '自定义顶栏前缀（留空默认显示 A股行情 / 港股行情 / 韩股行情 / 日股行情 / 美股行情）'
         required: false
         default: ''
         type: string
       max_age_hours:
-        description: '内容新鲜度上限（小时）；超过就整轮跳过并报错（brief 校验 004 生成时间）'
+        description: 'brief/octopus 模式：内容新鲜度上限（小时）'
         required: false
         default: '36'
         type: string
       force:
-        description: '即使内容与上次一致也照推（默认跳过，避免反复刷屏）'
+        description: '首轮忽略指纹强制重推全部启用页（默认仅推送有变化的页）'
         required: false
         default: 'false'
         type: choice
@@ -52,24 +69,34 @@ on:
           - 'false'
           - 'true'
       dry_run:
-        description: '仅预览不推送'
+        description: '仅渲染单轮预览并上传产物，不推送到 Zectrix'
         required: false
         default: 'false'
         type: choice
         options:
           - 'false'
           - 'true'
+      relay:
+        description: '自动接力 / 看门狗触发时为 true（跳过重复测试）；手动运行不用改'
+        required: false
+        default: false
+        type: boolean
 
-# 防重叠：上一次没跑完就排队，不并发推墨水屏
-concurrency:
-  group: octopus-board
-  cancel-in-progress: false
+permissions:
+  contents: read
+  actions: write
+
+env:
+  IS_DEFAULT_BRANCH: ${{ github.ref_name == github.event.repository.default_branch }}
+  INTERVAL_SECONDS: '60'
+  LOOP_MINUTES: '330'
 
 jobs:
-  push:
+  test:
+    name: 离线回归测试
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.relay) }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    timeout-minutes: 10
     steps:
       - name: 获取代码
         uses: actions/checkout@v4
@@ -77,82 +104,158 @@ jobs:
       - name: 安装 Python 环境
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: 安装依赖包
         run: pip install --disable-pip-version-check requests pillow
 
-      - name: 离线回归测试（不联网，先确认解析/排版没退化）
+      - name: 离线回归测试（不联网）
         run: python3 -m unittest discover -s tests -v
 
-      - name: 取回上次推送的内容指纹
+  push:
+    name: 五页行情面板（每分钟更新推屏）
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    # 同一分支只允许一个常驻循环在跑：预约的接力排队等候；新代码或手动触发排队时当前轮自动让位
+    concurrency:
+      group: octopus-board-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: 获取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖包
+        run: pip install --disable-pip-version-check requests pillow
+
+      - name: 取回上一轮变化基线与页面指纹
+        if: env.IS_DEFAULT_BRANCH == 'true'
         uses: actions/cache/restore@v4
         with:
           path: .octopus
-          key: octopus-state-${{ github.run_id }}
+          key: octopus-state-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
+            octopus-state-${{ github.ref_name }}-
             octopus-state-
 
-      - name: 生成并推送（brief=常驻看板 004/003/007 五页简报；octopus/news=仓库 02 打氧日报）
+      - name: 抓取、渲染并推送五页看板（1=A / 2=港 / 3=韩 / 4=日 / 5=美）
         env:
           ZECTRIX_API_KEY: ${{ secrets.ZECTRIX_API_KEY }}
           ZECTRIX_MAC: ${{ secrets.ZECTRIX_MAC }}
+          GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MARKET_STATE_FILE: ${{ github.workspace }}/.octopus/market_state.json
           OCTOPUS_STATE_FILE: ${{ github.workspace }}/.octopus/state.json
           OCTOPUS_REPO: ${{ vars.OCTOPUS_REPO || 'k-macao/02' }}
           OCTOPUS_PATH: ${{ vars.OCTOPUS_PATH || 'output/latest.html' }}
+          IN_MODE: ${{ inputs.mode }}
+          IN_PAGES: ${{ inputs.pages }}
+          IN_INTERVAL: ${{ inputs.interval_seconds }}
+          IN_TITLE: ${{ inputs.custom_title }}
+          IN_AGE: ${{ inputs.max_age_hours }}
+          IN_FORCE: ${{ inputs.force }}
+          IN_DRY: ${{ inputs.dry_run }}
         run: |
-          MODE="${{ inputs.mode || 'brief' }}"
-          PAGES="${{ inputs.pages || '1,2,3,4,5' }}"
-          TITLE="${{ inputs.custom_title }}"
-          AGE="${{ inputs.max_age_hours || '36' }}"
-          FORCE="${{ inputs.force || 'false' }}"
-          DRY="${{ inputs.dry_run || 'false' }}"
+          set -euo pipefail
+          MODE="${IN_MODE:-market}"
+          PAGES="${IN_PAGES:-1,2,3,4,5}"
+          INTERVAL="${IN_INTERVAL:-$INTERVAL_SECONDS}"
+          TITLE="${IN_TITLE:-}"
+          AGE="${IN_AGE:-36}"
+          FORCE="${IN_FORCE:-false}"
+          DRY="${IN_DRY:-false}"
+          if [ "$IS_DEFAULT_BRANCH" != "true" ]; then
+            DRY="true"
+          fi
 
           echo "=========================================="
-          echo " 章鱼 AI·全景分析 看板"
+          echo " 五页全球行情数据面板（A / 港 / 韩 / 日 / 美）"
           echo "=========================================="
+          echo " 分支:     ${GITHUB_REF_NAME} (默认分支=${IS_DEFAULT_BRANCH})"
           echo " 模式:     $MODE"
           echo " 页面:     $PAGES"
-          echo " 顶栏:     ${TITLE:-章鱼 AI·全景分析}"
-          echo " 日报源:   $OCTOPUS_REPO / $OCTOPUS_PATH"
-          echo " 新鲜度:   ${AGE} 小时"
-          echo " 内容未变: $([ "$FORCE" = true ] && echo '强制重推' || echo '跳过')"
+          echo " 间隔:     ${INTERVAL}s"
+          echo " 顶栏前缀: ${TITLE:-（默认市场标题）}"
+          echo " 首轮强推: $FORCE"
           echo " dry_run:  $DRY"
           echo "=========================================="
 
-          if [ "$MODE" = "brief" ]; then
-            # 常驻看板：004/003/007 五页简报（brief_board.py）
+          if [ "$MODE" = "market" ]; then
+            if [ "$DRY" = "true" ]; then
+              PREVIEW_DIR="${RUNNER_TEMP}/market-preview"
+              mkdir -p "$PREVIEW_DIR"
+              ARGS=(
+                --pages "$PAGES"
+                --interval "$INTERVAL"
+                --loop-seconds 0
+                --dry-run
+                --out-dir "$PREVIEW_DIR"
+                --meta-file "$PREVIEW_DIR/market_meta.json"
+              )
+              if [ -n "$TITLE" ]; then
+                ARGS+=(--title "$TITLE")
+              fi
+              echo "执行(单轮预览): python3 market_loop.py ${ARGS[*]}"
+              python3 market_loop.py "${ARGS[@]}"
+            else
+              ARGS=(
+                --pages "$PAGES"
+                --interval "$INTERVAL"
+                --loop-seconds "$((LOOP_MINUTES * 60))"
+                --relay
+                --state-file "$MARKET_STATE_FILE"
+                --workflow "run.yml"
+              )
+              if [ -n "$TITLE" ]; then
+                ARGS+=(--title "$TITLE")
+              fi
+              if [ "$FORCE" = "true" ]; then
+                ARGS+=(--force)
+              fi
+              echo "执行(每分钟常驻): python3 market_loop.py ${ARGS[*]}"
+              python3 market_loop.py "${ARGS[@]}"
+            fi
+          elif [ "$MODE" = "brief" ]; then
             ARGS=(--pages "$PAGES" --max-age-hours "$AGE")
             if [ -n "$TITLE" ]; then
               ARGS+=(--title "$TITLE")
             fi
-            if [ "$DRY" = true ]; then
+            if [ "$DRY" = "true" ]; then
               ARGS+=(--dry-run)
             fi
             echo "执行: python3 brief_board.py ${ARGS[*]}"
-            # 退出码非 0 = 整轮失败：Actions 显红告警，墨水屏保留上一次内容
             python3 brief_board.py "${ARGS[@]}"
           else
-            # 数组拼参数，避免标题含空格/· 时被 shell 拆分
             ARGS=(--mode "$MODE" --pages "$PAGES" --max-age-hours "$AGE")
             if [ -n "$TITLE" ]; then
               ARGS+=(--title "$TITLE")
             fi
-            if [ "$FORCE" = true ]; then
+            if [ "$FORCE" = "true" ]; then
               ARGS+=(--force)
             fi
-            if [ "$DRY" = true ]; then
+            if [ "$DRY" = "true" ]; then
               ARGS+=(--dry-run)
             fi
             echo "执行: python3 main.py ${ARGS[*]}"
-            # 退出码非 0 = 整轮失败：Actions 显红告警，墨水屏保留上一次内容
             python3 main.py "${ARGS[@]}"
           fi
 
-      - name: 记下本次推送的内容指纹
-        if: success() && hashFiles('.octopus/state.json') != ''
+      - name: 上传五页预览产物
+        if: env.IS_DEFAULT_BRANCH != 'true' || inputs.dry_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: market-panel-preview
+          path: ${{ runner.temp }}/market-preview/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: 保存本轮变化基线与页面指纹
+        if: always() && env.IS_DEFAULT_BRANCH == 'true' && (hashFiles('.octopus/market_state.json') != '' || hashFiles('.octopus/state.json') != '')
         uses: actions/cache/save@v4
         with:
           path: .octopus
-          key: octopus-state-${{ github.run_id }}
+          key: octopus-state-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
