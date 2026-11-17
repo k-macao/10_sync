@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-market_loop —— 五页全球行情数据面板（A / 港 / 韩 / 日 / 美）的每分钟常驻更新循环。
+market_loop —— 五页全球行情数据面板（A / 港 / 韩 / 日 / 美）的定时常驻更新循环。
 
 为什么用常驻循环而不是 cron：
-    GitHub Actions 的 schedule 最短只允许 */5，且公开仓库实际常延迟数十分钟到数小时，
-    做不到稳定的「一分钟更新」。因此采用常驻循环 + 自动接力 + 看门狗：
+    GitHub Actions 的 schedule 最短只允许 */5（5 分钟），且公开仓库实际常延迟数十分钟到数小时，
+    做不到稳定的「每 5 分钟更新」。因此采用常驻循环 + 自动接力 + 看门狗：
 
-    1. 每分钟一轮（默认 --interval 60，单调时钟对齐整周期，慢轮不补跑）：
-       并发抓取 A/港/韩/日/美 实时行情 → 计算日内涨跌与 1 分钟变化 → 渲染 5 页 →
+    1. 每 5 分钟一轮（默认 --interval 300，单调时钟对齐整周期，慢轮不补跑）：
+       并发抓取 A/港/韩/日/美 实时行情（7 路源互备）→ 计算日内涨跌与 5 分钟变化 → 渲染 5 页 →
        仅把画面发生变化的页推送到 Zectrix 墨水屏（休市市场零刷屏，也不向仓库产生机器人提交）。
     2. 自动接力（GitHub Actions 单任务上限 6 小时，默认一轮跑 330 分钟 = 5.5 小时）：
        正常运行满 5 分钟且至少成功 1 轮后，通过 workflow_dispatch 预约下一轮（排队等待）；
        当前轮结束（跑满 / 异常 / 取消）后排队轮立即接棒，收尾时若无排队后继再补触发一次。
     3. 自动让位：
        检测到同分支有更新且未结束的非机器人接力运行（新代码 push 或人工手动触发）时，
-       当前轮在 1 分钟内收尾退出，把执行权交给新运行。
+       当前轮在下一轮（≤5 分钟）收尾退出，把执行权交给新运行。
     4. 防失控：
        启动未满 5 分钟或从未成功采样时不自触发；缺 ZECTRIX 密钥时首轮立即报错退出，
        交由 market-watchdog.yml 定时兜底。
 
 本地 / 服务器用法：
     python3 market_loop.py --loop-seconds 0 --dry-run   # 单轮预览
-    python3 market_loop.py --forever --interval 60      # 本地常驻每分钟更新推屏
+    python3 market_loop.py --forever --interval 300     # 本地常驻每 5 分钟更新推屏
 """
 from __future__ import annotations
 
@@ -51,8 +51,9 @@ from market_quotes import TZ_CN
 
 HERE = Path(__file__).resolve().parent
 
-DEFAULT_INTERVAL_SECONDS = 60.0
-MIN_INTERVAL_SECONDS = 30.0
+# 推送节奏：默认 5 分钟。抓取只发生在每一轮推送之前（抓 → 渲染 → 推），中间不再空转刷接口。
+DEFAULT_INTERVAL_SECONDS = 300.0
+MIN_INTERVAL_SECONDS = 60.0
 DEFAULT_LOOP_SECONDS = 330 * 60     # 5.5 小时（留 30 分钟余量给 6 小时上限）
 MAX_LOOP_SECONDS = 340 * 60
 MIN_RELAY_LOOP_SECONDS = 5 * 60
@@ -63,7 +64,7 @@ DEFAULT_WORKFLOW = "run.yml"
 RELAY_EVENT = "workflow_dispatch"
 BOT_SUFFIX = "[bot]"
 
-CYCLE_TIMEOUT_SECONDS = 50.0
+CYCLE_TIMEOUT_SECONDS = 90.0
 GH_TIMEOUT_SECONDS = 30.0
 DISPATCH_ATTEMPTS = 3
 DISPATCH_RETRY_SECONDS = 5.0
@@ -219,6 +220,7 @@ def build_cycle_cmd(config: LoopConfig, *, force: bool = False) -> List[str]:
     cmd = list(config.board_cmd) + [
         "--pages", config.pages,
         "--state-file", config.state_file,
+        "--interval", str(int(round(config.interval))),
     ]
     if config.title:
         cmd += ["--title", config.title]
@@ -378,7 +380,7 @@ def run_loop(
         except Exception as exc:  # noqa: BLE001
             stats.unexpected_errors += 1
             stats.tail_errors += 1
-            annotate(stats, "warning", f"本周期意外异常，下一分钟重试：{type(exc).__name__}: {exc}")
+            annotate(stats, "warning", f"本周期意外异常，下一轮重试：{type(exc).__name__}: {exc}")
         else:
             if outcome == OUTCOME_CONFIG_ERR:
                 stats.config_failed = True
@@ -527,16 +529,19 @@ def write_step_summary(text: str) -> None:
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> LoopConfig:
     ap = argparse.ArgumentParser(
-        description="五页全球行情数据面板（A/港/韩/日/美）每分钟常驻更新循环"
+        description="五页全球行情数据面板（A/港/韩/日/美）定时常驻更新循环（默认 5 分钟一轮）"
     )
     ap.add_argument("--pages", default="1,2,3,4,5", help="推送页面（默认 1,2,3,4,5 = A,港,韩,日,美）")
     ap.add_argument("--title", default=None, help="自定义顶栏前缀")
-    ap.add_argument("--state-file", default=DEFAULT_STATE_FILE, help="每分钟变化与指纹状态文件")
+    ap.add_argument("--state-file", default=DEFAULT_STATE_FILE, help="轮间变化与指纹状态文件")
     ap.add_argument("--out-dir", default=None, help="PNG 输出目录")
     ap.add_argument("--meta-file", default=None, help="可选：JSON 元数据输出文件")
     ap.add_argument(
         "--interval", type=float, default=DEFAULT_INTERVAL_SECONDS,
-        help=f"更新间隔秒数（默认 {DEFAULT_INTERVAL_SECONDS:.0f}，最小 {MIN_INTERVAL_SECONDS:.0f}）",
+        help=(
+            f"推送间隔秒数（默认 {DEFAULT_INTERVAL_SECONDS:.0f} = 5 分钟，最小 {MIN_INTERVAL_SECONDS:.0f}）；"
+            "每轮都是「先抓取再推送」，页面上的「N分」变化与页脚标签同步跟随该间隔"
+        ),
     )
     ap.add_argument(
         "--loop-seconds", type=float, default=DEFAULT_LOOP_SECONDS,

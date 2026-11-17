@@ -26,20 +26,27 @@ def _read_fixture(name: str) -> str:
         return fh.read()
 
 
-def _fixture_texts(jp_open: bool = False) -> dict:
+def _fixture_texts(jp_open: bool = False, backups: bool = False) -> dict:
     jp = _read_fixture("market_naver_jp.json")
     if jp_open:
         jp = jp.replace('"CLOSE"', '"OPEN"')
-    return {
+    texts = {
         mq.SOURCE_TENCENT: _read_fixture("market_tencent.txt"),
         mq.SOURCE_SINA: _read_fixture("market_sina.txt"),
         mq.SOURCE_NAVER_KR: _read_fixture("market_naver_kr.json"),
         mq.SOURCE_NAVER_JP: jp,
     }
+    if backups:
+        texts.update({
+            mq.SOURCE_SINA_INTL: _read_fixture("market_sina_intl.txt"),
+            mq.SOURCE_NETEASE: _read_fixture("market_netease.json"),
+            mq.SOURCE_EASTMONEY: _read_fixture("market_eastmoney.json"),
+        })
+    return texts
 
 
-def _fixture_panel(jp_open: bool = False) -> mq.PanelData:
-    return mq.build_panel(_fixture_texts(jp_open=jp_open), demo=False)
+def _fixture_panel(jp_open: bool = False, backups: bool = False) -> mq.PanelData:
+    return mq.build_panel(_fixture_texts(jp_open=jp_open, backups=backups), demo=False)
 
 
 class TestMarketSpecAndParsers(unittest.TestCase):
@@ -274,6 +281,164 @@ class TestMergeFallbackAndDelta(unittest.TestCase):
         self.assertEqual(mq.arrow_for(1.0), "▲")
         self.assertEqual(mq.arrow_for(-1.0), "▼")
         self.assertEqual(mq.arrow_for(0.0), "")
+
+
+class TestBackupSourcesAggregation(unittest.TestCase):
+    """7 路备用源：解析正确、多源一致性投票、主源全挂时兜底不空屏。"""
+
+    def test_three_new_parsers_units_and_mapping(self):
+        intl = mq.parse_sina_intl(_read_fixture("market_sina_intl.txt"))
+        self.assertEqual(
+            sorted(intl),
+            ["KOSPI", "N225", "hkHSI", "usDJI", "usINX", "usIXIC"],
+        )
+        self.assertAlmostEqual(intl["hkHSI"].last, 23655.20)
+        self.assertAlmostEqual(intl["usIXIC"].pct, -0.97)
+        self.assertEqual(intl["hkHSI"].source, mq.SOURCE_SINA_INTL)
+        # 新浪国际指数无成交量/成交额，不能凭空造数
+        self.assertIsNone(intl["hkHSI"].volume)
+        self.assertIsNone(intl["hkHSI"].turnover)
+
+        ne = mq.parse_netease(_read_fixture("market_netease.json"))
+        self.assertEqual(len(ne), 5)
+        self.assertAlmostEqual(ne["sh000001"].last, 3634.3529)
+        self.assertAlmostEqual(ne["sh000001"].prev_close, 3655.8295)
+        # 成交量口径是「股」：与腾讯（手×100）同量级，不能再次 ×100
+        self.assertAlmostEqual(ne["sh000001"].volume, 472293657.0)
+        self.assertAlmostEqual(ne["sh000001"].turnover, 770614169984.0)
+        self.assertEqual(mq.fmt_as_of(ne["sh000001"].time), "11-13 15:43")
+
+        em = mq.parse_eastmoney(_read_fixture("market_eastmoney.json"))
+        self.assertEqual(len(em), 11)
+        self.assertAlmostEqual(em["hkHSTECH"].last, 3813.19)
+        self.assertAlmostEqual(em["usDJI"].pct, 0.10)
+        self.assertAlmostEqual(em["sh000001"].volume, 472293657.0)
+        self.assertAlmostEqual(em["hkHSI"].volume, 11525719783.0)
+        # 脏数据（null / "-"）不产生有效行情
+        dirty = '{"data":{"diff":[{"f2":"-","f3":"-","f12":"000001","f13":1}]}}'
+        self.assertEqual(mq.parse_eastmoney(dirty), {})
+        self.assertEqual(mq.parse_netease("_ntes_quote_callback();"), {})
+        self.assertEqual(mq.parse_netease("not json"), {})
+
+    def test_sources_tuple_covers_seven_feeds_with_fixtures(self):
+        self.assertEqual(
+            [src for src, *_ in mq.SOURCES],
+            [
+                mq.SOURCE_TENCENT, mq.SOURCE_SINA, mq.SOURCE_NAVER_KR,
+                mq.SOURCE_NAVER_JP, mq.SOURCE_SINA_INTL, mq.SOURCE_NETEASE,
+                mq.SOURCE_EASTMONEY,
+            ],
+        )
+        for src, *_ in mq.SOURCES:
+            self.assertTrue((FIXTURES and os.path.exists(
+                os.path.join(FIXTURES, mq.FIXTURE_FILES[src])
+            )), f"{src} 缺少离线 fixture")
+
+    def test_backup_sources_alone_keep_five_pages_alive(self):
+        backups_only = {
+            mq.SOURCE_TENCENT: None,
+            mq.SOURCE_SINA: None,
+            mq.SOURCE_NAVER_KR: None,
+            mq.SOURCE_NAVER_JP: None,
+            mq.SOURCE_SINA_INTL: _read_fixture("market_sina_intl.txt"),
+            mq.SOURCE_NETEASE: _read_fixture("market_netease.json"),
+            mq.SOURCE_EASTMONEY: _read_fixture("market_eastmoney.json"),
+        }
+        panel = mq.build_panel(backups_only)
+        self.assertEqual(panel.pages[1].live_rows, 5)   # 网易 + 东方财富
+        self.assertEqual(panel.pages[2].live_rows, 3)   # 新浪国际 + 东方财富
+        self.assertEqual(panel.pages[3].live_rows, 1)   # 新浪国际（KOSPI）
+        self.assertEqual(panel.pages[4].live_rows, 1)   # 新浪国际（日经225）
+        self.assertEqual(panel.pages[5].live_rows, 3)   # 新浪国际 + 东方财富
+        self.assertEqual(panel.sources[mq.SOURCE_EASTMONEY], True)
+
+        # 腾讯单挂：A/港/美 由其余 6 路补齐，依旧 15/15
+        texts = _fixture_texts(backups=True)
+        p_no_tx = mq.build_panel({**texts, mq.SOURCE_TENCENT: None})
+        self.assertEqual(p_no_tx.live_rows, 15)
+        self.assertEqual(p_no_tx.pages[1].rows[0].quote.source, mq.SOURCE_SINA)
+
+    def test_consistency_vote_prefers_fresh_source_only(self):
+        tx = mq.parse_tencent(_read_fixture("market_tencent.txt"))
+        em = mq.parse_eastmoney(_read_fixture("market_eastmoney.json"))
+
+        # 1) 偏差在容差内（东方财富比腾讯高 0.4%）：取主源腾讯，不被备用源改写点位
+        em["usDJI"].last = round(tx["usDJI"].last * 1.004, 2)
+        pages = mq.merge_pages(tx, {}, {}, {}, eastmoney=em)
+        self.assertAlmostEqual(pages[5].rows[0].quote.last, tx["usDJI"].last)
+
+        # 2) 偏差超容差且备用源时间更旧/无时间：仍信主源（防延迟源把数据带偏）
+        em["usDJI"].last = round(tx["usDJI"].last * 1.2, 2)
+        pages2 = mq.merge_pages(tx, {}, {}, {}, eastmoney=em)
+        self.assertAlmostEqual(pages2[5].rows[0].quote.last, tx["usDJI"].last)
+
+        # 3) 偏差超容差，但备用源时间严格更新（主源卡住）：改信备用源
+        stale_tx = mq.parse_tencent(_read_fixture("market_tencent.txt"))
+        stale_tx["usDJI"].time = datetime(2026, 11, 13, 16, 43, 26, tzinfo=mq.TZ_US)
+        em2 = mq.parse_eastmoney(_read_fixture("market_eastmoney.json"))
+        em2["usDJI"].last = 53999.99
+        em2["usDJI"].time = datetime(2026, 11, 13, 17, 30, 0, tzinfo=mq.TZ_US)
+        pages3 = mq.merge_pages(stale_tx, {}, {}, {}, eastmoney=em2)
+        self.assertAlmostEqual(pages3[5].rows[0].quote.last, 53999.99)
+
+    def test_backup_source_fills_missing_fields_only(self):
+        tx = mq.parse_tencent(_read_fixture("market_tencent.txt"))
+        # 腾讯 A 股行缺成交额时，用网易/东方财富补上（不改点位与涨跌）
+        for k in ("sh000001",):
+            tx[k].turnover = None
+        ne = mq.parse_netease(_read_fixture("market_netease.json"))
+        pages = mq.merge_pages(tx, {}, {}, {}, netease=ne)
+        q = pages[1].rows[0].quote
+        self.assertAlmostEqual(q.last, tx["sh000001"].last)
+        self.assertAlmostEqual(q.turnover, ne["sh000001"].turnover)
+        self.assertEqual(q.source, mq.SOURCE_TENCENT)
+
+
+class TestFiveMinuteCadence(unittest.TestCase):
+    """推送节奏默认 5 分钟：文案随间隔变化，循环与工作流默认值一致。"""
+
+    def test_labels_follow_interval(self):
+        self.assertEqual(market_board.interval_minutes(None), 5)
+        self.assertEqual(market_board.delta_label(None), "5分")
+        self.assertEqual(market_board.update_label(None), "5分钟更新")
+        self.assertEqual(market_board.delta_label(60), "1分")
+        self.assertEqual(market_board.update_label(900), "15分钟更新")
+
+        panel = mq.demo_panel(with_delta=True)
+        q = panel.pages[1].rows[0].quote
+        self.assertIn("5分", market_board._delta_short(q))
+        self.assertIn("1分", market_board._delta_short(q, tag="1分"))
+        with_pct = market_board._delta_short(q, with_pct=True)
+        self.assertTrue(with_pct.startswith("5分"))
+
+    def test_board_page_shows_five_minute_tags(self):
+        panel = mq.demo_panel(with_delta=True)
+        img5 = market_board.render_market_page(panel.pages[1], demo=True, validate=True)
+        img1 = market_board.render_market_page(
+            panel.pages[1], demo=True, validate=True, interval_seconds=60,
+        )
+        self.assertNotEqual(
+            market_board.image_digest(img5), market_board.image_digest(img1),
+            "间隔不同应导致「N分 / N分钟更新」文案不同，画面指纹随之变化",
+        )
+        self.assertEqual(market_board.DEFAULT_UPDATE_TAG, "5分钟更新")
+
+    def test_loop_defaults_to_300s_and_passes_interval_to_cycle(self):
+        cfg = ml_parse(["--dry-run"])
+        self.assertEqual(cfg.interval, 300.0)
+        cmd = market_board_delta_cmd(cfg)
+        self.assertIn("--interval", cmd)
+        self.assertEqual(cmd[cmd.index("--interval") + 1], "300")
+
+
+def ml_parse(argv):
+    import market_loop
+    return market_loop.parse_args(list(argv))
+
+
+def market_board_delta_cmd(cfg):
+    import market_loop
+    return market_loop.build_cycle_cmd(cfg)
 
 
 class TestRenderAndPreflight(unittest.TestCase):
@@ -519,7 +684,7 @@ class TestRunOnceDedupAndResilience(unittest.TestCase):
         with mock.patch("sys.argv", ["main.py", "--demo-delta", "--dry-run"]):
             args = main.parse_args()
         self.assertEqual(args.mode, "market")
-        self.assertEqual(args.interval, 60.0)
+        self.assertEqual(args.interval, 300.0)
         with tempfile.TemporaryDirectory() as td:
             orig_run = market_board.run_once
 

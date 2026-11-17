@@ -14,8 +14,8 @@ market_quotes —— 五页全球行情数据面板的数据层（A / 港 / 韩 
     last        最新点位
     change      较昨收涨跌额（日内点位变化）
     pct         较昨收涨跌幅（%）
-    delta       较上一轮行情点位变化（每分钟变化；首轮无前值时为 None）
-    delta_pct   较上一轮行情变化幅度（%）
+    delta       较上一轮抓取的点位变化（默认 5 分钟变化；首轮无前值时为 None）
+    delta_pct   较上一轮抓取的变化幅度（%）
     prev_close  昨收
     open        今开
     high / low  日内最高 / 最低
@@ -25,11 +25,20 @@ market_quotes —— 五页全球行情数据面板的数据层（A / 港 / 韩 
     time        行情时间（带交易所时区；展示统一转北京时间）
     status      市场状态（OPEN / CLOSE / ""）
 
-公开免密钥数据源（4 路并发抓取，单源故障不影响其余市场）：
+公开免密钥数据源（7 路并发互备，单源故障不影响其余市场）：
     1. 腾讯证券 qt.gtimg.cn          A / 港（r_hk* 实时）/ 美 全字段；日韩实时点位与涨跌
     2. 新浪财经 hq.sinajs.cn         港股成交股数 + 实时全字段；A / 美独立备用源（需 Referer）
     3. Naver 金融 domestic/index     KOSPI / KOSDAQ 实时全字段（含成交量、成交额）
     4. Naver 金融 worldstock/index   日经225 / 东证指数全字段（东京交易所延迟约 15 分钟）
+    5. 新浪国际指数 int_*            港 / 日 / 韩 / 美 指数备用源（纯文本，无成交量）
+    6. 网易财经 api.money.126.net     A 股 5 大指数备用源（JSONP，纯文本可解析）
+    7. 东方财富 push2.eastmoney.com   A / 港 / 美 指数备用源（JSON，成交额含股数）
+
+聚合规则（多源一致性投票）：
+    · 同一指数取「最新且最可靠」的两路为主备：主源补字段，备份只补缺失字段；
+    · 两路点位偏差在容差内视为一致，直接采用主源；偏差超容差（如环球源口径异常、
+      延迟源卡住）则按「时间更新者优先、时间相同优先主源」的规则取舍；
+    · 所有源全部缺失时才显示 --，绝不推空屏覆盖上一版内容。
 
 零第三方依赖；解析与状态演进全部是纯函数，便于离线回归测试。
 """
@@ -85,20 +94,88 @@ SINA_REFERER = "https://finance.sina.com.cn/"
 NAVER_KR_URL = "https://polling.finance.naver.com/api/realtime/domestic/index/KOSPI,KOSDAQ"
 NAVER_JP_URL = "https://polling.finance.naver.com/api/realtime/worldstock/index/.N225,.TOPX"
 
+# 新浪国际指数（纯文本，形如 var hq_str_int_dji="道琼斯,47916.57,85.09,0.18";）：
+# 只有「点位 / 涨跌额 / 涨跌幅」三项，用作港/日/韩/美指数的轻量备用源。
+SINA_INTL_URL = (
+    "https://hq.sinajs.cn/list="
+    "int_hangseng,int_nikkei,int_kospi,int_dji,int_nasdaq,int_sp500"
+)
+SINA_INTL_MAP = {
+    "int_hangseng": "hkHSI",
+    "int_nikkei": "N225",
+    "int_kospi": "KOSPI",
+    "int_dji": "usDJI",
+    "int_nasdaq": "usIXIC",
+    "int_sp500": "usINX",
+}
+
+# 网易财经 A 股指数（JSONP，形如 _ntes_quote_callback({"0000001":{"price":...}});）：
+# A 股 5 大指数的稳定备用源，字段含今开/昨收/最高/最低/成交额，无成交股数。
+NETEASE_URL = (
+    "https://api.money.126.net/data/feed/"
+    "0000001,1399001,1399006,0000300,0000688?callback=_ntes_quote_callback"
+)
+NETEASE_MAP = {
+    "0000001": "sh000001",
+    "1399001": "sz399001",
+    "1399006": "sz399006",
+    "0000300": "sh000300",
+    "0000688": "sh000688",
+}
+
+# 东方财富 push2（JSON）：A / 港 / 美 指数备用源，成交额（f6 元）与成交量（f5 手/股）可用。
+EASTMONEY_URL = (
+    "https://push2.eastmoney.com/api/qt/ulist.np/get"
+    "?fltt=2&invt=2&fields=f2,f3,f4,f5,f6,f12,f13,f14,f15,f16,f17,f18"
+    "&secids=1.000001,0.399001,0.399006,1.000300,1.000688,"
+    "100.HSI,124.HSTECH,100.HSCEI,100.DJIA,100.NDX,100.SPX"
+)
+EASTMONEY_MAP = {
+    "1.000001": "sh000001",
+    "0.399001": "sz399001",
+    "0.399006": "sz399006",
+    "1.000300": "sh000300",
+    "1.000688": "sh000688",
+    "100.HSI": "hkHSI",
+    "124.HSTECH": "hkHSTECH",
+    "100.HSCEI": "hkHSCEI",
+    "100.DJIA": "usDJI",
+    "100.NDX": "usIXIC",
+    "100.SPX": "usINX",
+}
+
 SOURCE_TENCENT = "tencent"
 SOURCE_SINA = "sina"
 SOURCE_NAVER_KR = "naver_kr"
 SOURCE_NAVER_JP = "naver_jp"
+SOURCE_SINA_INTL = "sina_intl"
+SOURCE_NETEASE = "netease"
+SOURCE_EASTMONEY = "eastmoney"
 
 SOURCE_LABELS = {
     SOURCE_TENCENT: "腾讯证券",
     SOURCE_SINA: "新浪财经",
     SOURCE_NAVER_KR: "Naver金融(韩)",
     SOURCE_NAVER_JP: "Naver金融(日)",
+    SOURCE_SINA_INTL: "新浪国际指数",
+    SOURCE_NETEASE: "网易财经",
+    SOURCE_EASTMONEY: "东方财富",
 }
+
+# 点位一致性容差：两路源的同一指数偏差在容差内视为同一笔行情。
+# 各市场波动率不同：A 股/美股取 1%，港股/韩股 1.5%，日经环球源口径差异稍大取 3%（与原 N225 阈值一致）。
+SOURCE_TOLERANCE = 0.01
 
 # 日经225：盘中优先用腾讯实时点位+涨跌，但若与 Naver 偏差 >3% 视为环球源异常，改信 Naver。
 N225_SOURCE_TOLERANCE = 0.03
+# 各市场点位一致性容差（两路源偏差在此范围内视为同一笔行情，取主源）
+MARKET_TOLERANCE = {
+    "A": 0.01,
+    "港": 0.015,
+    "韩": 0.015,
+    "日": 0.03,
+    "美": 0.01,
+}
 MAX_ABS_PCT = 50.0
 MAX_PRICE_VALUE = 1e9
 MAX_PCT_VALUE = 1e4
@@ -110,6 +187,9 @@ SINA_US_MAP = {
     "gb_$ixic": "usIXIC",
     "gb_$inx": "usINX",
 }
+
+# 成交量单位换算（不同源口径不同，统一折算成「股」）。
+# 注意：网易与东方财富返回的已经是成交量「股数」（新浪深市口径同样是股数），不要再乘 100。
 
 
 # =====================================================================
@@ -649,6 +729,110 @@ def parse_sina(text: str) -> Dict[str, Quote]:
     return out
 
 
+def parse_sina_intl(text: str) -> Dict[str, Quote]:
+    """解析新浪国际指数 int_*（港 / 日 / 韩 / 美指数备用源）。
+
+    字段：名称,最新点位,涨跌额,涨跌幅%（无成交量、无行情时间）。
+    """
+    out: Dict[str, Quote] = {}
+    for symbol, payload in _SINA_LINE.findall(text or ""):
+        key = SINA_INTL_MAP.get(symbol)
+        if key is None or not payload:
+            continue
+        fields = payload.split(",")
+        if len(fields) < 4:
+            continue
+        q = Quote(
+            source=SOURCE_SINA_INTL,
+            last=_to_float(fields[1]),
+            change=_to_float(fields[2]),
+            pct=_to_float(fields[3]),
+        )
+        clean = _finalize_quote(q)
+        if clean is not None:
+            out[key] = clean
+    return out
+
+
+def parse_netease(text: str) -> Dict[str, Quote]:
+    """解析网易财经 A 股指数 JSONP（time 字段为 2026/11/13 15:00:00，北京时间）。
+
+    字段：price / yesterday / open / high / low / turnover（成交额，元）/ volume（手）。
+    """
+    out: Dict[str, Quote] = {}
+    start, end = (text or "").find("{"), (text or "").rfind("}")
+    if start < 0 or end <= start:
+        return out
+    try:
+        doc = json.loads(text[start:end + 1])
+    except (TypeError, ValueError):
+        return out
+    if not isinstance(doc, dict):
+        return out
+    for code, item in doc.items():
+        key = NETEASE_MAP.get(str(code))
+        if key is None or not isinstance(item, dict):
+            continue
+        q = Quote(
+            source=SOURCE_NETEASE,
+            last=_to_float(item.get("price")),
+            prev_close=_to_float(item.get("yesterday")),
+            open=_to_float(item.get("open")),
+            high=_to_float(item.get("high")),
+            low=_to_float(item.get("low")),
+            turnover=_positive(_to_float(item.get("turnover"))),
+            time=_parse_time(str(item.get("time") or ""), "%Y/%m/%d %H:%M:%S", TZ_CN),
+        )
+        q.volume = _positive(_to_float(item.get("volume")))   # 股
+        clean = _finalize_quote(q)
+        if clean is not None:
+            out[key] = clean
+    return out
+
+
+def parse_eastmoney(text: str) -> Dict[str, Quote]:
+    """解析东方财富 push2 ulist（fltt=2 已是最小单位，f2 最新 / f4 涨跌额 / f3 涨跌幅%）。
+
+    字段：f2 最新点位 / f3 涨跌幅% / f4 涨跌额 / f5 成交量 / f6 成交额（元）/
+          f15 最高 / f16 最低 / f17 今开 / f18 昨收。A 股 f5 单位为手，其余为股。
+    东方财富不返回行情时间，time 留空（不参与「时间更新者优先」的投票）。
+    """
+    out: Dict[str, Quote] = {}
+    try:
+        doc = json.loads(text or "")
+    except (TypeError, ValueError):
+        return out
+    data = doc.get("data") if isinstance(doc, dict) else None
+    items = data.get("diff") if isinstance(data, dict) else None
+    if isinstance(items, dict):
+        items = list(items.values())
+    if not isinstance(items, list):
+        return out
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        secid = f"{item.get('f13')}.{item.get('f12')}"
+        key = EASTMONEY_MAP.get(secid)
+        if key is None:
+            continue
+        q = Quote(
+            source=SOURCE_EASTMONEY,
+            last=_to_float(item.get("f2")),
+            pct=_to_float(item.get("f3")),
+            change=_to_float(item.get("f4")),
+            high=_to_float(item.get("f15")),
+            low=_to_float(item.get("f16")),
+            open=_to_float(item.get("f17")),
+            prev_close=_to_float(item.get("f18")),
+            turnover=_positive(_to_float(item.get("f6"))),
+        )
+        q.volume = _positive(_to_float(item.get("f5")))       # 股
+        clean = _finalize_quote(q)
+        if clean is not None:
+            out[key] = clean
+    return out
+
+
 def parse_naver(text: str) -> Dict[str, Quote]:
     """解析 Naver 金融 polling JSON（韩国 KOSPI/KOSDAQ + 日本 .N225/.TOPX）。"""
     out: Dict[str, Quote] = {}
@@ -712,29 +896,23 @@ def _merge_primary_backup(primary: Optional[Quote], backup: Optional[Quote]) -> 
     return Quote()
 
 
-def _merge_hk(
-    tx_rt: Optional[Quote],
-    sina_rt: Optional[Quote],
-    tx_delayed: Optional[Quote],
+def _merge_n225(
+    naver: Optional[Quote],
+    tx_gz: Optional[Quote],
+    sina_intl: Optional[Quote] = None,
 ) -> Quote:
-    """港股：腾讯实时 r_hk* + 新浪 rt_hk* 成交股数；腾讯缺行用新浪；最后才回退延迟行。"""
-    if tx_rt is not None:
-        return _fill_missing(tx_rt, sina_rt)
-    if sina_rt is not None:
-        return copy.copy(sina_rt)
-    if tx_delayed is not None:
-        return copy.copy(tx_delayed)
-    return Quote()
+    """日经225：盘中用腾讯实时点位/涨跌 + Naver 开高低/成交量；收盘或偏差过大用 Naver。
 
-
-def _merge_n225(naver: Optional[Quote], tx_gz: Optional[Quote]) -> Quote:
-    """日经225：盘中用腾讯实时点位/涨跌 + Naver 开高低/成交量；收盘或偏差过大用 Naver。"""
+    Naver 与腾讯都缺行时才回退新浪国际指数（仅点位/涨跌，无开高低与成交量）。
+    """
     if naver is None:
-        return copy.copy(tx_gz) if tx_gz is not None else Quote()
+        if tx_gz is not None:
+            return copy.copy(tx_gz)
+        return copy.copy(sina_intl) if sina_intl is not None else Quote()
     if tx_gz is None or naver.status == "CLOSE":
-        return copy.copy(naver)
+        return _fill_missing(naver, sina_intl)
     if abs(tx_gz.last - naver.last) > naver.last * N225_SOURCE_TOLERANCE:
-        return copy.copy(naver)
+        return _fill_missing(naver, sina_intl)
     merged = copy.copy(tx_gz)
     merged.open = naver.open
     merged.high = max(naver.high, tx_gz.last) if naver.high is not None else None
@@ -746,33 +924,85 @@ def _merge_n225(naver: Optional[Quote], tx_gz: Optional[Quote]) -> Quote:
     return _finalize_quote(merged) or merged
 
 
+def _merge_candidates(candidates: List[Optional[Quote]], tolerance: float) -> Quote:
+    """多源一致性聚合：按优先级取第一路有效行情，其余源补缺失字段。
+
+    规则：
+      1. 候选按可靠性排序（主源在前），第一路有效行情为基准；
+      2. 与基准点位偏差在容差内 → 视为同一笔行情，只用来补缺失字段（不覆盖主源点位/涨跌）；
+      3. 偏差超容差 → 不直接覆盖，只有在「行情时间严格更新」时才改信该源
+         （例如主源卡住时，更新的备用源接管），避免延迟源/口径异常的源把好数据带偏；
+      4. 全部无效 → 空 Quote（该行显示 --，整页无有效行情时跳过推送）。
+    """
+    valid = [q for q in candidates if q is not None and q.valid]
+    if not valid:
+        return Quote()
+    best = copy.copy(valid[0])
+    for cand in valid[1:]:
+        if abs(cand.last - best.last) <= best.last * tolerance:
+            best = _fill_missing(best, cand)
+            continue
+        if cand.time is not None and (best.time is None or cand.time > best.time):
+            best = copy.copy(cand)
+    return best
+
+
 def merge_pages(
     tencent: Dict[str, Quote],
     sina: Dict[str, Quote],
     naver_kr: Dict[str, Quote],
     naver_jp: Dict[str, Quote],
+    sina_intl: Optional[Dict[str, Quote]] = None,
+    netease: Optional[Dict[str, Quote]] = None,
+    eastmoney: Optional[Dict[str, Quote]] = None,
 ) -> Dict[int, MarketPageData]:
+    """把 7 路源按指数聚合成五页。后三路（新浪国际 / 网易 / 东方财富）为可选备用源。"""
+    sina_intl = sina_intl or {}
+    netease = netease or {}
+    eastmoney = eastmoney or {}
+
     pages: Dict[int, MarketPageData] = {}
     for mspec in MARKET_PAGES:
         rows: List[PanelRow] = []
+        tol = MARKET_TOLERANCE.get(mspec.code, SOURCE_TOLERANCE)
         for rspec in mspec.rows:
             k = rspec.key
-            if mspec.code in ("A", "美"):
-                q = _merge_primary_backup(tencent.get(k), sina.get(k))
+            if mspec.code == "A":
+                # 腾讯 → 新浪 → 网易 → 东方财富（四路互为备份）
+                q = _merge_candidates(
+                    [tencent.get(k), sina.get(k), netease.get(k), eastmoney.get(k)], tol
+                )
             elif mspec.code == "港":
-                q = _merge_hk(
-                    tencent.get(k),
-                    sina.get(k),
-                    tencent.get(TENCENT_DELAYED_PREFIX + k),
+                # 腾讯 r_hk* 实时 → 新浪 rt_hk* → 新浪国际 → 东方财富 → 腾讯延迟行
+                q = _merge_candidates(
+                    [
+                        tencent.get(k),
+                        sina.get(k),
+                        sina_intl.get(k),
+                        eastmoney.get(k),
+                        tencent.get(TENCENT_DELAYED_PREFIX + k),
+                    ],
+                    tol,
                 )
             elif k == "KOSPI":
-                q = _merge_primary_backup(naver_kr.get("KOSPI"), tencent.get("gzKS11"))
+                q = _merge_candidates(
+                    [naver_kr.get("KOSPI"), tencent.get("gzKS11"), sina_intl.get("KOSPI")], tol
+                )
             elif k == "KOSDAQ":
-                q = _merge_primary_backup(naver_kr.get("KOSDAQ"), tencent.get("gzKOSDAQ"))
+                q = _merge_candidates(
+                    [naver_kr.get("KOSDAQ"), tencent.get("gzKOSDAQ")], tol
+                )
             elif k == "N225":
-                q = _merge_n225(naver_jp.get("N225"), tencent.get("gzN225"))
+                q = _merge_n225(
+                    naver_jp.get("N225"), tencent.get("gzN225"), sina_intl.get("N225")
+                )
             elif k == "TOPX":
                 q = copy.copy(naver_jp["TOPX"]) if "TOPX" in naver_jp else Quote()
+            elif mspec.code == "美":
+                # 腾讯 → 新浪 → 新浪国际 → 东方财富
+                q = _merge_candidates(
+                    [tencent.get(k), sina.get(k), sina_intl.get(k), eastmoney.get(k)], tol
+                )
             else:
                 q = Quote()
             rows.append(PanelRow(spec=rspec, quote=q))
@@ -783,13 +1013,13 @@ def merge_pages(
 
 
 # =====================================================================
-# 每分钟变化（delta）状态演进
+# 轮间变化（delta）状态演进：默认 5 分钟变化
 # =====================================================================
 def apply_delta_state(panel: PanelData, prev_state: Optional[dict]) -> dict:
     """把当前行情与上一轮状态比对，填充每行的 delta / delta_pct 与市场成交增量。
 
     性质：
-      1. 首次运行或跨交易日（按各交易所当地日期判定）：delta=None，不把隔夜跳空当成 1 分钟变化；
+      1. 首次运行或跨交易日（按各交易所当地日期判定）：delta=None，不把隔夜跳空当成 5 分钟变化；
       2. 行情 (last, time) 未变（午休 / 收盘 / 周末）：沿用上一笔有效 delta，渲染结果逐位不变，
          墨水屏零多余刷屏；
       3. 盘中出现新行情（time 推进或 last 变动）：delta = 本次 last - 上次 last；
@@ -867,7 +1097,7 @@ def apply_delta_state(panel: PanelData, prev_state: Optional[dict]) -> dict:
                 "delta_pct": delta_pct,
             }
 
-        # 页脚汇总量额的每分钟增量
+        # 页脚汇总量额的轮间增量
         mcode = page.spec.code
         cur_val = page.summary_value
         as_of = page.as_of
@@ -940,6 +1170,9 @@ SOURCES = (
     (SOURCE_SINA, SINA_URL, "gb18030", {"Referer": SINA_REFERER}, parse_sina),
     (SOURCE_NAVER_KR, NAVER_KR_URL, "utf-8", None, parse_naver),
     (SOURCE_NAVER_JP, NAVER_JP_URL, "utf-8", None, parse_naver),
+    (SOURCE_SINA_INTL, SINA_INTL_URL, "gb18030", {"Referer": SINA_REFERER}, parse_sina_intl),
+    (SOURCE_NETEASE, NETEASE_URL, "utf-8", None, parse_netease),
+    (SOURCE_EASTMONEY, EASTMONEY_URL, "utf-8", None, parse_eastmoney),
 )
 
 FIXTURE_FILES = {
@@ -947,6 +1180,9 @@ FIXTURE_FILES = {
     SOURCE_SINA: "market_sina.txt",
     SOURCE_NAVER_KR: "market_naver_kr.json",
     SOURCE_NAVER_JP: "market_naver_jp.json",
+    SOURCE_SINA_INTL: "market_sina_intl.txt",
+    SOURCE_NETEASE: "market_netease.json",
+    SOURCE_EASTMONEY: "market_eastmoney.json",
 }
 
 
@@ -963,20 +1199,30 @@ def build_panel(texts: Dict[str, Optional[str]], demo: bool = False) -> PanelDat
         parsed[SOURCE_SINA],
         parsed[SOURCE_NAVER_KR],
         parsed[SOURCE_NAVER_JP],
+        parsed.get(SOURCE_SINA_INTL, {}),
+        parsed.get(SOURCE_NETEASE, {}),
+        parsed.get(SOURCE_EASTMONEY, {}),
     )
     sources = {src: bool(parsed[src]) for src in parsed}
     return PanelData(pages=pages, sources=sources, demo=demo)
 
 
-def demo_panel(with_delta: bool = False) -> PanelData:
-    """离线样例面板（tests/fixtures/market_*）；with_delta=True 时附带模拟上一分钟基线。"""
+def demo_panel(with_delta: bool = False, with_backup_sources: bool = True) -> PanelData:
+    """离线样例面板（tests/fixtures/market_*）；with_delta=True 时附带模拟上一轮基线。
+
+    with_backup_sources=True（默认，与线上一致）时 7 路源全开：
+    备用源（新浪国际 / 网易 / 东方财富）点位与主源一致，只用来补齐缺失字段。
+    """
     texts = {
         src: (FIXTURE_DIR / fname).read_text(encoding="utf-8")
         for src, fname in FIXTURE_FILES.items()
+        if with_backup_sources or src not in (
+            SOURCE_SINA_INTL, SOURCE_NETEASE, SOURCE_EASTMONEY,
+        )
     }
     panel = build_panel(texts, demo=True)
     if with_delta:
-        # 构造同一交易日 1 分钟前的真实量级基线，方便离线检视「分变」展示效果
+        # 构造同一交易日一轮（默认 5 分钟）前的真实量级基线，方便离线检视「分变」展示效果
         offsets = {
             "sh000001": -2.35,
             "sz399001": 14.80,
@@ -1030,7 +1276,7 @@ def demo_panel(with_delta: bool = False) -> PanelData:
 
 
 def collect_panel(fetch: Callable[..., str] = fetch_text) -> PanelData:
-    """并发抓取 4 路公开行情接口并组装 5 页面板；单路失败只影响对应行。"""
+    """并发抓取 7 路公开行情接口并组装 5 页面板；单路失败只影响对应行。"""
     def _load(entry) -> Optional[str]:
         _src, url, enc, hdrs, _parser = entry
         try:
