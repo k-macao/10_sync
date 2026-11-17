@@ -1,0 +1,41 @@
+name: 行情面板看门狗
+
+# 五页全球行情数据面板（A / 港 / 韩 / 日 / 美）由 run.yml 中的常驻循环每分钟更新并自动接力。
+# 本看门狗每小时检查两次：仅当默认分支上没有任何运行中或排队中的 run.yml 时，才重新拉起循环，
+# 用于兜底连续启动失败、运行被误取消等整条接力链断开的情况。
+#
+# 要暂停每分钟更新：请同时 Disable「章鱼 AI·全景分析 看板」和本工作流，再取消运行中/排队中的运行。
+
+on:
+  schedule:
+    - cron: '17,47 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  watchdog:
+    name: 检查并拉起每分钟行情循环
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 检查 run.yml 是否正在运行或排队
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.event.repository.default_branch || github.ref_name }}
+        run: |
+          set -euo pipefail
+          unfinished="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/run.yml/runs?branch=${BRANCH}&per_page=20" \
+            --jq '[.workflow_runs[] | select(.status != "completed")] | length')"
+          if [[ "$unfinished" != "0" ]]; then
+            echo "行情循环正在运行或排队（${unfinished} 个未结束运行），无需拉起"
+            exit 0
+          fi
+          echo "未检测到运行中或排队中的行情循环，立即拉起 run.yml (mode=market)"
+          gh workflow run run.yml \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref "${BRANCH}" \
+            -f mode=market \
+            -f relay=true
