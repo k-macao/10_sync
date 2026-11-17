@@ -40,6 +40,12 @@ def _relay_cfg(**overrides) -> ml.LoopConfig:
 
 
 class TestMarketLoop(unittest.TestCase):
+    def setUp(self):
+        # 避免单元测试模拟的缺密钥/告警在 CI 日志里打出真实的 ::error:: 注解
+        patcher = mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_count_summary_pages_and_standby_classification(self):
         self.assertEqual(
             ml._count_summary_pages("📊 行情 15/15 · 推屏 P1(A)、P5(美) · 无变化 3 页"),
